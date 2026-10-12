@@ -1,0 +1,51 @@
+# ============================================================
+# Career Fit Scoring Weights
+# ============================================================
+#
+# *** INITIAL / DEFAULT CONFIGURATION ***
+#
+# These values are reasonable starting points chosen to make the Career
+# Recommendation Agent (Step 8) functional for a first working prototype.
+# They are NOT derived from data, NOT scientifically validated, and NOT
+# the product of any sensitivity analysis. Per the master prompt Section
+# 12 ("Keep the weights configurable... Record the weights used for every
+# experiment"), these numbers exist here specifically so they can be
+# tuned and the exact values used in any given run can be logged -- they
+# must be treated as an open research question, not a settled result.
+# Before citing scoring behavior in the thesis, run a sensitivity
+# analysis / ablation over these parameters (Section 20-21).
+
+# Base weight for a CORE required skill (career_skills.evidence_class = 'CORE').
+core_weight: 1.0
+
+# Base weight for a SUPPORTING/COMPOSITE required skill.
+# Deliberately lower than core_weight: a supporting skill contributes to
+# fit, but should not dominate the score the way a core skill does.
+supporting_weight: 0.5
+
+# Multiplier applied when the user's matched skill has evidence_status='none'
+# (claimed, but no evidence persisted yet). MUST be > 0 (Section 4: a claim
+# without evidence is not equivalent to a missing skill) and MUST be < 1.0
+# (an unverified claim is still weaker than a verified one).
+claim_only_multiplier: 0.5
+
+# Multiplier applied based on the KB-side confidence of the career_skills
+# mapping itself (career_skills.confidence). This reflects how certain the
+# KB curators were about this specific career-skill relationship, not
+# anything about the user. 'low' does not currently occur in the dataset's
+# career_skills table (verified during Step 1/4 inspection) but is kept
+# here as a documented fallback in case future KB updates introduce it.
+confidence_multiplier:
+  high: 1.0
+  medium: 0.85
+  low: 0.7
+
+# Secondary, self-reported modifier: a small bonus applied to a matched
+# skill's contribution when the user provided ANY non-empty proficiency
+# value. This is NOT a comparison against a KB-required proficiency level
+# -- the KB has no such field (verified during Step 8 design inspection).
+# It only rewards the user having self-reported some proficiency level at
+# all, as a weak secondary signal. Contribution is capped at the skill's
+# full weight regardless of this bonus, so it can never push fit_score
+# above 1.0.
+proficiency_modifier: 0.1
