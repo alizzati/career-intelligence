@@ -226,6 +226,21 @@ Step 13.2 is complete. Stop here; upload/API integration is not implemented.
 * Tests run: `python -m pytest tests\test_api_analysis.py -q` — 22 passed (23 LangGraph and 1 httpx deprecation warnings). Regression scripts for Steps 7–11 passed (Profile Agent smoke left test users 77 and 78).
 * Limitations: **no authentication, authorization, or ownership checks** (any caller can analyze or write to any `user_id`); no rate limiting or CORS; Starlette spools the multipart body before the size check, so a proxy-level limit is required; repeated uploads duplicate education, experience, project, and certification rows; synchronous, slow requests; not yet run against live uvicorn/DB/Gemini; three DB smoke tests not rerun; `config/scoring_weight.yaml` filename does not match the `scoring_weights.yaml` that `load_scoring_weights()` looks for, so defaults are used silently; DB credentials are hardcoded in `core/db.py` and `scripts/import_kb.py`.
 
+## Step 14.1 Security and Configuration Hardening Record
+* **DB config:** `core/db.py` kini membangun koneksi hanya dari `CAREER_DB_URL` atau `CAREER_DB_PASSWORD` (+ opsional `CAREER_DB_HOST/PORT/NAME/USER`), dengan engine lazy. Konfigurasi hilang → `DatabaseConfigurationError` (API: 503 `database_not_configured`). `scripts/import_kb.py` memakai `get_engine()`. Ditambahkan `backend/.env.example`.
+* **Bobot skor:** `config/scoring_weight.yaml` diganti nama menjadi `scoring_weights.yaml` agar dimuat `load_scoring_weights()`. `PyYAML` dideklarasikan.
+* **Batas request:** `app/api/boundary.py` (ASGI murni) menghitung byte body aktual; `/analysis/cv` dibatasi file limit + overhead, JSON dibatasi kecil. `Content-Length` bukan sumber kepercayaan.
+* **Idempotensi profil:** penulisan pendidikan, pengalaman, proyek, sertifikasi, dan evidence berupa insert-if-absent pada kunci alami ternormalisasi, diserialisasi per user dengan advisory lock. Tanpa perubahan skema; best-effort.
+* **Akses:** `/analysis/*` fail-closed kecuali `CAREER_API_ACKNOWLEDGE_NO_AUTH=true`, dan hanya untuk klien loopback kecuali `CAREER_API_ALLOW_REMOTE_CLIENTS=true`. **Ini bukan autentikasi.**
+* **Status HTTP:** verifikasi FAIL/REVISE tetap HTTP 200 dengan `verified:false`; input salah 4xx; kegagalan internal 5xx (dikunci oleh tes).
+* **Tes (dijalankan lokal oleh peneliti):**
+* `test_db_config`, `test_scoring_weights_config`, `test_api_boundary`, `test_api_analysis`, `test_profile_idempotency` → **72 passed**.
+  * Regresi: CV extraction, PII, privacy boundary, workflow, verification → **65 passed**.
+  * Regresi skrip: career fit, skill gap (unit, smoke, agent), roadmap, user service smoke, profile agent smoke → lulus.
+* **Risiko terbuka:** tanpa autentikasi/otorisasi/kepemilikan (IDOR), tanpa rate limiting; Starlette tetap men-spool body di bawah batas; idempotensi tidak menjamin unik (dua stint dengan perusahaan+jabatan sama bergabung; deskripsi evidence berbeda antar-eksekusi LLM bisa menambah baris); upsert `create_user_skill` bisa menimpa `proficiency`/`skill_id` saat upload ulang; `ProfileAgentResult.evidence_persisted` kini berarti "diproses"; loader bobot masih jatuh diam-diam ke default jika YAML rusak; `import_kb.py` tidak idempoten; manifest dependensi belum lengkap.
+> * **Belum dilakukan:** rotasi password DB, pemeriksaan riwayat Git, pembersihan user uji (86-91) di DB lokal.
+
+
 Do not mark pending work complete without inspecting the code and running the relevant tests.
 
 ## Update Rule
