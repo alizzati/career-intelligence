@@ -23,6 +23,8 @@ from app.schemas.verification import VerificationCheck, VerificationResult
 from app.workflows.career_workflow import CareerWorkflow
 from tests.test_cv_text_extraction_service import make_docx, make_pdf
 
+from app.core.db import DatabaseConfigurationError
+
 RAW = (
     "Name: Sinta Contoh\nEmail: sinta@example.test\nPhone: +62 812-3456-7890\n"
     "Address: Jl. Melati No. 10, Bandung\nNIK: 3174012345678901\n"
@@ -128,6 +130,11 @@ def upload(client, content, filename, user_id="17", **data):
 
 
 @pytest.fixture(autouse=True)
+def local_dev_access(monkeypatch):
+    monkeypatch.setenv("CAREER_API_ACKNOWLEDGE_NO_AUTH", "true")
+    monkeypatch.setenv("CAREER_API_ALLOW_REMOTE_CLIENTS", "true")
+
+@pytest.fixture(autouse=True)
 def isolated_lookups():
     with mock.patch("app.api.routes.analysis.us.get_user_full_profile",
                     return_value=SimpleNamespace(user_id=17)) as users, \
@@ -143,39 +150,14 @@ def test_health():
     client, _ = make_client(make_workflow()[0])
     assert client.get("/health").json() == {"status": "ok"}
 
-@pytest.mark.parametrize(("make_content", "filename", "fmt"), [
-    pytest.param(
-        lambda: make_pdf("Synthetic candidate profile with backend engineering experience."),
-        "cv.pdf", "pdf", id="pdf"),
-    pytest.param(make_docx, "cv.docx", "docx", id="docx"),
-    pytest.param(lambda: TXT, "cv.txt", "txt", id="txt"),
-])
-def test_valid_uploads_run_workflow_to_verified(make_content, filename, fmt):
-    workflow, deps = make_workflow()
-    client, _ = make_client(workflow)
-    response = upload(client, make_content(), filename)
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["final_status"] == "VERIFIED" and body["verified"] is True
-    assert body["document"]["format"] == fmt and "filename" not in body["document"]
-    assert body["verification"]["status"] == "PASS"
-    assert body["recommendations"][0]["career_id"] == "C01"
-    assert len(deps["profile_agent"].calls) == 1
-    assert not {"profile_result", "extracted", "redacted_profile_text",
-                "raw_profile_text"} & set(body)
 
-@pytest.mark.parametrize(("make_content", "filename", "status", "code"), [
-    pytest.param(lambda: b"plain text", "unsupported.docm", 415, "unsupported_format", id="docm"),
-    pytest.param(lambda: b"%PDF-1.7", "disguised.txt", 422, "format_mismatch", id="pdf-as-txt"),
-    pytest.param(lambda: b"synthetic text", "fake.pdf", 422, "format_mismatch", id="text-as-pdf"),
-    pytest.param(lambda: b"", "empty.txt", 422, "empty_file", id="empty"),
-    pytest.param(lambda: b" \r\n\t", "blank.txt", 422, "empty_document", id="blank"),
-    pytest.param(lambda: b"%PDF-1.7 broken", "broken.pdf", 422, "unreadable_document", id="broken-pdf"),
-    pytest.param(lambda: make_pdf("", image_only=True), "scanned.pdf", 422,
-                 "scanned_pdf_unsupported", id="scanned-pdf"),
+@pytest.mark.parametrize(("content", "filename", "fmt"), [
+    pytest.param(make_pdf("Synthetic candidate profile with backend engineering experience."),
+                 "cv.pdf", "pdf", id="pdf"),
+    pytest.param(make_docx(), "cv.docx", "docx", id="docx"),
+    pytest.param(TXT, "cv.txt", "txt", id="txt"),
 ])
-
-def test_invalid_documents_are_rejected_before_the_workflow(make_content, filename, status, code):
+def test_valid_uploads_run_workflow_to_verified(content, filename, fmt):
     workflow, deps = make_workflow()
     client, _ = make_client(workflow)
     response = upload(client, content, filename)
@@ -190,14 +172,16 @@ def test_invalid_documents_are_rejected_before_the_workflow(make_content, filena
 
 
 @pytest.mark.parametrize(("content", "filename", "status", "code"), [
-    (b"plain text", "unsupported.docm", 415, "unsupported_format"),
-    (b"%PDF-1.7", "disguised.txt", 422, "format_mismatch"),
-    (b"synthetic text", "fake.pdf", 422, "format_mismatch"),
-    (b"", "empty.txt", 422, "empty_file"),
-    (b" \r\n\t", "blank.txt", 422, "empty_document"),
-    (b"%PDF-1.7 broken", "broken.pdf", 422, "unreadable_document"),
-    (make_pdf("", image_only=True), "scanned.pdf", 422, "scanned_pdf_unsupported"),
+    pytest.param(b"plain text", "unsupported.docm", 415, "unsupported_format", id="docm"),
+    pytest.param(b"%PDF-1.7", "disguised.txt", 422, "format_mismatch", id="pdf-as-txt"),
+    pytest.param(b"synthetic text", "fake.pdf", 422, "format_mismatch", id="text-as-pdf"),
+    pytest.param(b"", "empty.txt", 422, "empty_file", id="empty"),
+    pytest.param(b" \r\n\t", "blank.txt", 422, "empty_document", id="blank"),
+    pytest.param(b"%PDF-1.7 broken", "broken.pdf", 422, "unreadable_document", id="broken-pdf"),
+    pytest.param(make_pdf("", image_only=True), "scanned.pdf", 422,
+                 "scanned_pdf_unsupported", id="scanned-pdf"),
 ])
+
 def test_invalid_documents_are_rejected_before_the_workflow(content, filename, status, code):
     workflow, deps = make_workflow()
     client, _ = make_client(workflow)
@@ -382,3 +366,47 @@ def test_settings_from_env(monkeypatch):
     monkeypatch.setenv("CAREER_API_MAX_UPLOAD_BYTES", "0")
     with pytest.raises(ValueError):
         ApiSettings.from_env()
+
+
+
+@pytest.mark.parametrize(("make_verifier", "max_revisions", "expected"), [
+    pytest.param(lambda: FakeVerifier([failing("evidence.provenance_references")]), 2,
+                 "VERIFICATION_FAILED", id="no-revision-route"),
+    pytest.param(lambda: FakeVerifier([failing("roadmap.gap_coverage")]), 0,
+                 "REVISION_LIMIT_REACHED", id="limit-reached"),
+    pytest.param(lambda: FakeVerifier([failing("evidence.occupational_context", "REVISE")]), 2,
+                 "VERIFICATION_FAILED", id="revise-status"),
+])
+def test_failed_verification_is_http_200_with_verified_false(make_verifier, max_revisions, expected):
+    workflow, _ = make_workflow(verification_agent=make_verifier(), max_revisions=max_revisions)
+    client, _ = make_client(workflow)
+    for response in (
+        upload(client, TXT, "cv.txt"),
+        client.post("/analysis/profile", json={"user_id": 17}),
+    ):
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["verified"] is False and body["final_status"] == expected
+        assert body["verification"]["status"] in {"FAIL", "REVISE"}
+        assert body["verification"]["checks"]          # findings are reported, not hidden
+
+
+def test_http_status_distinguishes_verification_outcome_from_request_and_server_errors():
+    client, _ = make_client(make_workflow()[0])
+    assert upload(client, TXT, "cv.txt").status_code == 200                       # verified
+    assert upload(client, b"x", "cv.docm").status_code == 415                      # unsupported file
+    assert upload(client, b"%PDF-1.7", "cv.txt").status_code == 422                # signature mismatch
+    assert client.post("/analysis/profile", json={"user_id": 0}).status_code == 422  # invalid input
+    small, _ = make_client(make_workflow()[0], ApiSettings(max_upload_bytes=10, upload_chunk_bytes=4))
+    assert upload(small, b"x" * 50, "big.txt").status_code == 413                  # oversized file
+    broken, _ = make_client(make_workflow(
+        verification_agent=FakeVerifier(error=RuntimeError("boom")))[0])
+    assert broken.post("/analysis/profile", json={"user_id": 17}).status_code == 500  # internal failure
+
+
+def test_missing_database_configuration_is_a_safe_503(isolated_lookups):
+    isolated_lookups.users.side_effect = DatabaseConfigurationError("CAREER_DB_PASSWORD secret-detail")
+    client, _ = make_client(make_workflow()[0])
+    response = client.post("/analysis/profile", json={"user_id": 17})
+    assert response.status_code == 503 and response.json()["error"]["code"] == "database_not_configured"
+    assert "CAREER_DB" not in response.text and "secret-detail" not in response.text

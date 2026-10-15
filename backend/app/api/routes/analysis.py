@@ -19,6 +19,8 @@ from app.services import user_service as us
 from app.services.cv_text_extraction_service import CVTextExtractionError, CVTextExtractor
 from app.services.pii_redaction_service import redact_pii
 
+from app.core.db import DatabaseConfigurationError
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
@@ -42,6 +44,9 @@ def _precheck(user_id: int, target_career_id: str | None) -> str | None:
 
 
 def _internal_error(exc: Exception) -> ApiError:
+    if isinstance(exc, DatabaseConfigurationError):
+        logger.error("Database is not configured.")
+        return ApiError(503, "database_not_configured", "The service database is not configured.")
     logger.error("Analysis request failed (%s).", type(exc).__name__)  # type only
     return ApiError(500, "internal_error", "An internal error occurred.")
 

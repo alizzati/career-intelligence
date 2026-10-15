@@ -1,12 +1,13 @@
+import sys
 from pathlib import Path
 import pandas as pd
-from sqlalchemy import create_engine, text
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # make `app` importable
+from app.core.db import get_engine
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 XLSX_PATH = BASE_DIR / "data" / "occupational_knowledge_base_verified_v1_0.xlsx"
-DB_URL = "postgresql+psycopg2://postgres:MySQL0512@localhost:5433/career_intelligence"
 
-engine = create_engine(DB_URL)
+engine = get_engine()
 xls = pd.ExcelFile(XLSX_PATH)
 
 def load(sheet):
