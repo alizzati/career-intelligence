@@ -218,6 +218,14 @@ Step 13.2 is complete. Stop here; upload/API integration is not implemented.
   intensive documents remain limitations. OCR and Step 14 API integration
   are pending.
 
+## Step 14 FastAPI Integration Record
+* Added `app/main.py`, `app/api/{errors,uploads,responses,dependencies}.py`, `app/api/routes/{health,analysis}.py`, `app/core/config.py`, `app/schemas/api.py`, `tests/test_api_analysis.py`. `requirements.txt` += fastapi, python-multipart, uvicorn, httpx.
+* Endpoints: `GET /health`; `POST /analysis/cv` (multipart `user_id`, `file`, optional `target_career_id`); `POST /analysis/profile` (JSON). Order for CV: bounded read → `CVTextExtractor` → `redact_pii` → `CareerWorkflow` (Profile Agent receives only redacted text).
+* Verification failure is HTTP 200 with `verified: false` and `final_status` `VERIFICATION_FAILED` or `REVISION_LIMIT_REACHED`; only `ERROR` returns HTTP 500. Responses omit `llm_error` detail and workflow exception messages.
+* No schema, agent, or LLM-provider changes.
+* Tests run: `python -m pytest tests\test_api_analysis.py -q` — 22 passed (23 LangGraph and 1 httpx deprecation warnings). Regression scripts for Steps 7–11 passed (Profile Agent smoke left test users 77 and 78).
+* Limitations: **no authentication, authorization, or ownership checks** (any caller can analyze or write to any `user_id`); no rate limiting or CORS; Starlette spools the multipart body before the size check, so a proxy-level limit is required; repeated uploads duplicate education, experience, project, and certification rows; synchronous, slow requests; not yet run against live uvicorn/DB/Gemini; three DB smoke tests not rerun; `config/scoring_weight.yaml` filename does not match the `scoring_weights.yaml` that `load_scoring_weights()` looks for, so defaults are used silently; DB credentials are hardcoded in `core/db.py` and `scripts/import_kb.py`.
+
 Do not mark pending work complete without inspecting the code and running the relevant tests.
 
 ## Update Rule
