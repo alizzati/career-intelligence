@@ -18,6 +18,9 @@ Hybrid Verified Multi-Agent Career Intelligence System for IT Graduates.
 * Step 13: LangGraph multi-agent orchestration.
 * Step 13.1: Best-effort PII redaction and Profile Agent privacy boundary.
 * Step 13.2: In-memory PDF, DOCX, and TXT text extraction.
+* Step 14: FastAPI integration and Step 14.1 security/configuration hardening.
+* Step 14.2: Runtime integration tests against the local database and FastAPI app.
+* Step 14.3: Existing-profile privacy hardening for persisted user text.
 
 Steps 5–11 regression tests were run locally during Step 12 implementation and passed.
 Step 12 deterministic checks and mocked semantic-review tests passed; a local-KB
@@ -26,7 +29,10 @@ Step 13's focused tests and local workflow integration run passed.
 
 ## Current Checkpoint
 
-Step 13.2 is complete. Stop here; upload/API integration is not implemented.
+Steps 14.2 and 14.3 are complete. The database-backed runtime tests use the
+local `career_intelligence` database through FastAPI's TestClient and fake
+LLMs; they do not establish live Gemini integration or a network-served Uvicorn
+analysis.
 
 ## Frozen Constraints
 
@@ -53,21 +59,24 @@ Step 13.2 is complete. Stop here; upload/API integration is not implemented.
   (title, description, URL, role), certifications (name, issuer, dates,
   credential URL), claimed skills (claim, normalized ID/name, proficiency),
   and evidence (type, description, URL); every string value is redacted first.
+* For existing-profile analysis, persisted user claim/proficiency strings are
+  redacted in the Skill-Gap LLM prompt. Sanitized copies are supplied to
+  verification and API response serialization; canonical IDs, deterministic
+  categories/scores, and the original Step 9 result remain unchanged.
 * PII redaction is best-effort pattern matching, not a guarantee that all
   personal information is detected. CV file extraction is implemented as a
   standalone in-memory service. Its output must pass through the existing PII
-  redactor before any Profile Agent/LLM call. API upload handling remains
-  pending and must enforce this order.
+  redactor before any Profile Agent/LLM call. The implemented CV API enforces
+  this order; Step 14.2 exercises it using synthetic input and a fake LLM.
 * Orchestration revision limit is configurable; a workflow is only marked
   VERIFIED when the overall verification and every check pass without unresolved
   unsupported claims or required revisions.
 
 ## Pending Work
 
-1. Integrate the API and complete end-to-end workflow.
-2. Review logging, reproducibility, and evaluation support.
-3. Implement and evaluate baseline and ablation configurations.
-4. Implement or review frontend integration.
+1. Review logging, reproducibility, and evaluation support.
+2. Implement and evaluate baseline and ablation configurations.
+3. Implement or review frontend integration.
 
 ## Step 12 Verification Record
 
@@ -224,7 +233,7 @@ Step 13.2 is complete. Stop here; upload/API integration is not implemented.
 * Verification failure is HTTP 200 with `verified: false` and `final_status` `VERIFICATION_FAILED` or `REVISION_LIMIT_REACHED`; only `ERROR` returns HTTP 500. Responses omit `llm_error` detail and workflow exception messages.
 * No schema, agent, or LLM-provider changes.
 * Tests run: `python -m pytest tests\test_api_analysis.py -q` — 22 passed (23 LangGraph and 1 httpx deprecation warnings). Regression scripts for Steps 7–11 passed (Profile Agent smoke left test users 77 and 78).
-* Limitations: **no authentication, authorization, or ownership checks** (any caller can analyze or write to any `user_id`); no rate limiting or CORS; Starlette spools the multipart body before the size check, so a proxy-level limit is required; repeated uploads duplicate education, experience, project, and certification rows; synchronous, slow requests; not yet run against live uvicorn/DB/Gemini; three DB smoke tests not rerun; `config/scoring_weight.yaml` filename does not match the `scoring_weights.yaml` that `load_scoring_weights()` looks for, so defaults are used silently; DB credentials are hardcoded in `core/db.py` and `scripts/import_kb.py`.
+* Limitations at initial API implementation: **no authentication, authorization, or ownership checks** (any caller can analyze or write to any `user_id`); no rate limiting or CORS; Starlette spools the multipart body before the size check, so a proxy-level limit is required; repeated-upload persistence had not yet been tested; synchronous, slow requests; no live Gemini integration test; three DB smoke tests not rerun; the scoring-weight filename mismatch and database credential risks were reported at that checkpoint.
 
 ## Step 14.1 Security and Configuration Hardening Record
 * **DB config:** `core/db.py` kini membangun koneksi hanya dari `CAREER_DB_URL` atau `CAREER_DB_PASSWORD` (+ opsional `CAREER_DB_HOST/PORT/NAME/USER`), dengan engine lazy. Konfigurasi hilang → `DatabaseConfigurationError` (API: 503 `database_not_configured`). `scripts/import_kb.py` memakai `get_engine()`. Ditambahkan `backend/.env.example`.
@@ -238,8 +247,129 @@ Step 13.2 is complete. Stop here; upload/API integration is not implemented.
   * Regresi: CV extraction, PII, privacy boundary, workflow, verification → **65 passed**.
   * Regresi skrip: career fit, skill gap (unit, smoke, agent), roadmap, user service smoke, profile agent smoke → lulus.
 * **Risiko terbuka:** tanpa autentikasi/otorisasi/kepemilikan (IDOR), tanpa rate limiting; Starlette tetap men-spool body di bawah batas; idempotensi tidak menjamin unik (dua stint dengan perusahaan+jabatan sama bergabung; deskripsi evidence berbeda antar-eksekusi LLM bisa menambah baris); upsert `create_user_skill` bisa menimpa `proficiency`/`skill_id` saat upload ulang; `ProfileAgentResult.evidence_persisted` kini berarti "diproses"; loader bobot masih jatuh diam-diam ke default jika YAML rusak; `import_kb.py` tidak idempoten; manifest dependensi belum lengkap.
-> * **Belum dilakukan:** rotasi password DB, pemeriksaan riwayat Git, pembersihan user uji (86-91) di DB lokal.
 
+
+## Step 14.2 Runtime Integration Test Record
+
+* Added `backend/tests/test_api_runtime_integration.py`. The suite is explicitly
+  enabled with `CAREER_RUN_RUNTIME_DB_TESTS=1`, refuses non-loopback database
+  hosts and requires the local `career_intelligence` database with all 10
+  canonical careers. No separate test database or shared transaction fixture
+  exists; each test creates a uniquely named synthetic user and deletes only
+  that exact user ID. Existing foreign keys cascade its dependent rows.
+* Using the actual FastAPI app/TestClient, real workflow/agents/services, local
+  PostgreSQL and the local Knowledge Base, it exercises successful
+  `/analysis/profile` and `/analysis/cv` requests; persisted-claim PII
+  redaction; fake-LLM prompt privacy; malformed/oversized upload rejection;
+  `/health`; missing user/career handling on both analysis routes; verification
+  failure and revision exhaustion; and repeated CV requests. Repeat submission
+  retained one row per expected category and preserved existing
+  education/experience/project fields when fake extraction returned changed
+  descriptions.
+* Database configuration and connectivity failures are tested with injected
+  exceptions rather than by taking the local database offline. These cases
+  verify sanitized HTTP errors and logs. CV text, persisted claims, API
+  responses, fake LLM prompts, and captured logs use only synthetic test
+  values; no live LLM calls occur.
+* Tests run from `backend`:
+  * `$env:CAREER_RUN_RUNTIME_DB_TESTS='1'; python -m pytest tests\test_api_runtime_integration.py tests\test_profile_idempotency.py -q`
+    — **18 passed, 10 warnings** (one Starlette/httpx deprecation and nine
+    LangGraph `config_type` deprecations). The integration routes and
+    idempotency checks exercised local PostgreSQL; the database-failure cases
+    used mocks.
+  * `$env:CAREER_RUN_RUNTIME_DB_TESTS='1'; python -m pytest tests\test_api_runtime_integration.py tests\test_api_analysis.py tests\test_profile_idempotency.py tests\test_skill_gap_privacy.py tests\test_career_workflow_unit.py tests\test_profile_privacy_boundary.py tests\test_verification_agent_unit.py -q`
+    — **86 passed, 64 warnings** (one Starlette/httpx deprecation and 63
+    LangGraph `config_type` deprecations).
+  * `python -m py_compile tests\test_api_runtime_integration.py` — passed.
+  * `git diff --check` — passed.
+* Post-test cleanup check queried counts only: **zero** users in the synthetic
+  integration namespace and **zero** related profile rows remained. The local
+  database and KB connection were available; no credentials or connection
+  details were printed.
+* Scope limitation: TestClient exercised the ASGI application in-process, not a
+  separately running Uvicorn server. Live Gemini/provider behavior was not
+  tested. Repeat-upload tests verified unchanged education, experience, and
+  project fields; `create_user_skill` still updates proficiency/normalization
+  fields for a duplicate claim if later extraction returns different values,
+  so that remains a profile-update risk.
+
+## Step 14.3 Existing-Profile Privacy Hardening Record
+
+* Added `backend/app/services/profile_privacy_service.py` to create
+  privacy-safe copies of user-derived skill-gap claims, proficiency strings,
+  narratives, recommendation reasoning, roadmap summaries, and verification
+  findings. Canonical occupational fields, IDs, categories, evidence metadata,
+  scores, and the source Step 9 result are preserved.
+* Files changed: `backend/app/services/profile_privacy_service.py`,
+  `backend/app/agents/skill_gap_agent.py`,
+  `backend/app/agents/verification_agent.py`,
+  `backend/app/workflows/career_workflow.py`, `backend/app/api/responses.py`,
+  `backend/tests/test_skill_gap_privacy.py`,
+  `backend/tests/test_api_analysis.py`,
+  `backend/tests/test_verification_agent_unit.py`, and this state record.
+* `SkillGapAgent` now redacts persisted claim/proficiency text before prompt
+  construction and redacts narrative/error text before returning it. Its
+  embedded `SkillGapResult` remains the original unchanged Step 9 object.
+* `CareerWorkflow` passes sanitized copies to the Verification Agent.
+  Verification compares user-claim text only after applying the same PII
+  redactor to the expected deterministic result; deterministic IDs,
+  classifications, evidence fields, and scores are still compared. The
+  semantic-review prompt also sanitizes narrative text if the Verification
+  Agent is called directly.
+* API response construction sanitizes user-derived claim/proficiency fields and
+  narrative/error text without mutating workflow outputs. No database schema,
+  provider, API contract, or Step 9 calculation was changed.
+* Synthetic regression coverage verifies Skill-Gap and semantic-verification
+  LLM prompts, verifier inputs, API responses, captured logs, and preservation
+  of Step 9 classifications/source data.
+* Tests run:
+  * `python -m pytest tests\test_skill_gap_privacy.py tests\test_api_analysis.py tests\test_career_workflow_unit.py tests\test_profile_privacy_boundary.py tests\test_verification_agent_unit.py -q`
+    — **68 passed**, 55 existing framework deprecation warnings.
+  * `python -m py_compile app\services\profile_privacy_service.py app\agents\skill_gap_agent.py app\agents\verification_agent.py app\workflows\career_workflow.py app\api\responses.py tests\test_skill_gap_privacy.py tests\test_api_analysis.py tests\test_verification_agent_unit.py`
+    — passed.
+  * `python tests\test_skill_gap_agent_unit.py` — passed.
+* No live/paid LLM calls or real personal data were used. The redactor remains
+  best-effort and can miss PII outside its supported patterns. Raw persisted
+  profile values and the authoritative Step 9 object remain unchanged in
+  storage/workflow state; other unreviewed consumers of that data must apply
+  the same privacy boundary.
+
+## Step 14.4 Insert-Only Skill Ingestion
+
+* `user_repository.create_user_skill()` now uses `ON CONFLICT
+  (user_id, claimed_skill) DO NOTHING`, then fetches and returns the existing
+  row when a claim is already present. Repeated ingestion preserves the
+  original row ID, `skill_id`, `normalized_skill`, and `proficiency`, including
+  when a later extraction proposes different values or `NULL`. New claims are
+  inserted normally. The service/agent return contract and database schema are
+  unchanged.
+* Added synthetic database regressions for identical claims, changed
+  proficiency, changed canonical mapping/normalized value, incoming NULLs, and
+  insertion of new claims. Strengthened the runtime CV repeat-submission test
+  to assert that changed extracted proficiency does not overwrite the stored
+  value.
+* Files changed: `backend/app/repositories/user_repository.py`,
+  `backend/tests/test_profile_idempotency.py`,
+  `backend/tests/test_api_runtime_integration.py`, and this state record.
+* Tests run from `backend` with the opt-in loopback PostgreSQL integration
+  suite and local Knowledge Base:
+  * `$env:CAREER_RUN_RUNTIME_DB_TESTS='1'; python -m pytest tests\test_profile_idempotency.py tests\test_api_runtime_integration.py -q`
+    — **23 passed, 10 warnings** (one Starlette/httpx deprecation and nine
+    LangGraph `config_type` deprecations).
+  * `$env:CAREER_RUN_RUNTIME_DB_TESTS='1'; python -m pytest tests\test_api_runtime_integration.py tests\test_api_analysis.py tests\test_profile_idempotency.py tests\test_skill_gap_privacy.py tests\test_career_workflow_unit.py tests\test_profile_privacy_boundary.py tests\test_verification_agent_unit.py -q`
+    — **91 passed, 64 warnings** (one Starlette/httpx deprecation and 63
+    LangGraph `config_type` deprecations).
+  * `python -m tests.test_career_fit_service_unit` — passed.
+  * `python -m tests.test_skill_gap_service_unit` — passed.
+  * `python -m tests.test_skill_gap_agent_unit` — passed.
+* Database-backed tests used uniquely created synthetic users with cleanup of
+  only those exact IDs; no schema or existing user data was changed. No live or
+  paid LLM calls were made.
+* Explicit user-directed skill editing remains future work. Until such a path
+  is implemented, re-ingesting a claim is insert-only and cannot update the
+  stored proficiency or canonical mapping. Canonicalization differences in
+  `claimed_skill` text can still produce distinct claims because the existing
+  unique key is intentionally unchanged.
 
 Do not mark pending work complete without inspecting the code and running the relevant tests.
 
