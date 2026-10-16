@@ -25,6 +25,10 @@ from app.services.career_fit_service import (
     load_scoring_weights,
 )
 from app.services.skill_gap_service import classify_skill_gap
+from app.services.profile_privacy_service import (
+    redact_recommendations, redact_roadmap, redact_skill_gap_analysis,
+    redact_skill_gap_result,
+)
 
 
 SEMANTIC_SYSTEM_PROMPT = """You are the semantic grounding checker for a career-intelligence system.
@@ -300,8 +304,8 @@ class VerificationAgent:
                 gap.user_id, career, skills_by_career[career.career_id],
                 profile.skills, self.weights,
             )
-            actual_dump = gap.model_dump()
-            expected_dump = expected.model_dump()
+            actual_dump = redact_skill_gap_result(gap).model_dump()
+            expected_dump = redact_skill_gap_result(expected).model_dump()
             result_valid = actual_dump == expected_dump
             required_ids = [
                 skill.skill.skill_id for skill in skills_by_career[career.career_id]
@@ -454,10 +458,13 @@ class VerificationAgent:
                 "Manually review LLM-generated explanations against the retrieved occupational knowledge base."
             ], "Semantic review skipped because no LLMClient was configured."
 
-        gap_narrative = (
-            skill_gap.narrative.model_dump()
-            if isinstance(skill_gap, SkillGapAnalysisOut) else None
+        safe_recommendations = redact_recommendations(recommendations)
+        safe_skill_gap = (
+            redact_skill_gap_analysis(skill_gap)
+            if isinstance(skill_gap, SkillGapAnalysisOut)
+            else redact_skill_gap_result(skill_gap)
         )
+        safe_roadmap = redact_roadmap(roadmap)
         output = {
             "recommendations": [
                 {
@@ -466,10 +473,13 @@ class VerificationAgent:
                     "reasoning": item.reasoning,
                     "reasoning_source": item.reasoning_source,
                 }
-                for item in recommendations
+                for item in safe_recommendations
             ],
-            "skill_gap_narrative": gap_narrative,
-            "roadmap_summary": roadmap.summary,
+            "skill_gap_narrative": (
+                safe_skill_gap.narrative.model_dump()
+                if isinstance(safe_skill_gap, SkillGapAnalysisOut) else None
+            ),
+            "roadmap_summary": safe_roadmap.summary,
         }
 
         contexts: dict[str, dict] = {}

@@ -9,6 +9,7 @@ from sqlalchemy import text
 from app.agents.profile_agent import ProfileAgent
 from app.core.db import DatabaseConfigurationError, engine, get_engine
 from app.repositories import user_repository as repo
+from app.services import retrieval_service as rs
 from app.services import user_service as us
 
 
@@ -123,6 +124,81 @@ def test_concurrent_identical_writes_create_a_single_row(user_id):
     with ThreadPoolExecutor(max_workers=6) as pool:
         list(pool.map(lambda _: us.add_education(user_id, "Concurrent University", "BSc", "CS"), range(12)))
     assert counts(user_id)["education"] == 1
+
+
+def test_repeated_identical_skill_claim_preserves_row_id_and_does_not_duplicate(user_id):
+    first = us.add_user_skill(
+        user_id, "Synthetic idempotent skill", normalized_skill="Synthetic idempotent skill",
+        proficiency="intermediate",
+    )
+    repeated = us.add_user_skill(
+        user_id, "Synthetic idempotent skill", normalized_skill="Synthetic idempotent skill",
+        proficiency="intermediate",
+    )
+
+    assert repeated.user_skill_id == first.user_skill_id
+    skills = us.get_user_full_profile(user_id).skills
+    assert [skill.user_skill_id for skill in skills] == [first.user_skill_id]
+
+
+def test_repeated_skill_claim_with_different_proficiency_keeps_original(user_id):
+    first = us.add_user_skill(
+        user_id, "Synthetic proficiency skill", normalized_skill="Synthetic proficiency skill",
+        proficiency="intermediate",
+    )
+    repeated = us.add_user_skill(
+        user_id, "Synthetic proficiency skill", normalized_skill="Synthetic proficiency skill",
+        proficiency="advanced",
+    )
+
+    assert repeated.user_skill_id == first.user_skill_id
+    assert repeated.proficiency == "intermediate"
+
+
+def test_repeated_skill_claim_with_different_skill_mapping_keeps_original(user_id):
+    skills = rs.get_all_skills()
+    assert len(skills) >= 2, "The local Knowledge Base needs two skills for this regression."
+    original, changed = skills[:2]
+    first = us.add_user_skill(
+        user_id, "Synthetic mapped skill", skill_id=original.skill_id,
+        normalized_skill=original.canonical_name, proficiency="intermediate",
+    )
+    repeated = us.add_user_skill(
+        user_id, "Synthetic mapped skill", skill_id=changed.skill_id,
+        normalized_skill=changed.canonical_name, proficiency="intermediate",
+    )
+
+    assert repeated.user_skill_id == first.user_skill_id
+    assert repeated.skill_id == original.skill_id
+    assert repeated.normalized_skill == original.canonical_name
+
+
+def test_incoming_null_skill_fields_do_not_erase_existing_values(user_id):
+    skill = rs.get_all_skills()[0]
+    first = us.add_user_skill(
+        user_id, "Synthetic nullable skill", skill_id=skill.skill_id,
+        normalized_skill=skill.canonical_name, proficiency="advanced",
+    )
+    repeated = us.add_user_skill(user_id, "Synthetic nullable skill")
+
+    assert repeated.user_skill_id == first.user_skill_id
+    assert repeated.skill_id == skill.skill_id
+    assert repeated.normalized_skill == skill.canonical_name
+    assert repeated.proficiency == "advanced"
+
+
+def test_new_skill_claim_is_inserted_normally(user_id):
+    inserted = us.add_user_skill(
+        user_id, "Synthetic new skill", normalized_skill="Synthetic new skill",
+        proficiency="beginner",
+    )
+
+    assert inserted.user_skill_id > 0
+    assert inserted.claimed_skill == "Synthetic new skill"
+    assert inserted.proficiency == "beginner"
+    assert [skill.user_skill_id for skill in us.get_user_full_profile(user_id).skills] == [
+        inserted.user_skill_id
+    ]
 
 
 # ---- no database needed below ----

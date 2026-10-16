@@ -15,6 +15,9 @@ from app.schemas.skill_gap_agent import SkillGapAnalysisOut
 from app.schemas.user import UserFullProfileOut
 from app.schemas.verification import VerificationResult
 from app.services.pii_redaction_service import redact_pii
+from app.services.profile_privacy_service import (
+    redact_recommendations, redact_roadmap, redact_skill_gap_analysis,
+)
 from app.services import retrieval_service as rs
 from app.services import user_service as us
 
@@ -233,7 +236,11 @@ class CareerWorkflow:
                 raise ValueError(
                     "recommendations, skill-gap result, and roadmap are required for verification"
                 )
-            result = self.verification_agent.run(recommendations, gap, roadmap)
+            result = self.verification_agent.run(
+                redact_recommendations(recommendations),
+                redact_skill_gap_analysis(gap),
+                redact_roadmap(roadmap),
+            )
             return {
                 "verification": result,
                 "revision_target": None,

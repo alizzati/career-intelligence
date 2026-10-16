@@ -17,7 +17,7 @@ from app.core.config import ApiSettings, get_settings
 from app.main import create_app
 from app.schemas.career_fit import CareerRecommendationOut, ScoreBreakdownOut, SkillRefOut
 from app.schemas.learning_roadmap import LearningRoadmapItem, LearningRoadmapOut
-from app.schemas.skill_gap import SkillGapItem, SkillGapResult
+from app.schemas.skill_gap import MatchedUserClaim, SkillGapItem, SkillGapResult, UnmatchedUserClaim
 from app.schemas.skill_gap_agent import SkillGapAnalysisOut, SkillGapNarrative
 from app.schemas.verification import VerificationCheck, VerificationResult
 from app.workflows.career_workflow import CareerWorkflow
@@ -74,7 +74,12 @@ class FakeRecAgent:
 
 
 class FakeGapAgent:
+    def __init__(self, result=None):
+        self.result = result
+
     def run(self, user_id, career_id):
+        if self.result is not None:
+            return self.result
         return SkillGapAnalysisOut(
             skill_gap=make_gap(), narrative=SkillGapNarrative(summary="s", conclusion="c"),
             narrative_source="fallback-template")
@@ -94,8 +99,10 @@ class FakeVerifier:
     def __init__(self, results=None, error=None):
         self.results = list(results or [VerificationResult(status="PASS", checks=[])])
         self.error = error
+        self.calls = []
 
     def run(self, recommendations, skill_gap, roadmap):
+        self.calls.append((recommendations, skill_gap, roadmap))
         if self.error:
             raise self.error
         return self.results.pop(0) if len(self.results) > 1 else self.results[0]
@@ -358,6 +365,90 @@ def test_existing_profile_path_skips_profile_parsing(isolated_lookups):
     assert client.post("/analysis/profile", json={"user_id": 17}).status_code == 404
     bad = client.post("/analysis/profile", json={"user_id": 0})
     assert bad.status_code == 422 and "input" not in bad.text
+
+
+def test_existing_profile_pii_is_redacted_at_verification_and_response_boundaries(
+    isolated_lookups, caplog,
+):
+    email = "synthetic.profile@example.test"
+    phone = "0812-5555-0199"
+    base = make_gap()
+    claimed = SkillGapItem(
+        skill_id="S001", canonical_name="SQL", status="matched_claimed_only",
+        evidence_class="CORE", kb_confidence="high", weight=1.0, contribution=0.0,
+        matched_user_claim=MatchedUserClaim(
+            claimed_skill=email, proficiency=phone, evidence_status="none", evidence_count=0,
+        ),
+    )
+    unmatched = UnmatchedUserClaim(
+        user_skill_id=88, claimed_skill=email, proficiency=phone,
+        evidence_status="none", evidence_count=0,
+    )
+    gap = base.model_copy(update={
+        "matched_claimed_only": [claimed],
+        "missing": [],
+        "unmatched_user_claims": [unmatched],
+    })
+    analysis = SkillGapAnalysisOut(
+        skill_gap=gap,
+        narrative=SkillGapNarrative(
+            summary=f"Claim: {email}, proficiency {phone}.",
+            conclusion=f"Contact {email} at {phone}.",
+            unmatched_claim_observations=[
+                {"user_skill_ids": [88], "text": f"User provided {email} and {phone}."}
+            ],
+        ),
+        narrative_source="fallback-template",
+    )
+
+    class PiiRecommendationAgent(FakeRecAgent):
+        def run(self, user_id):
+            results = super().run(user_id)
+            results[0] = results[0].model_copy(update={
+                "reasoning": f"User claim {email}; self-reported proficiency {phone}."
+            })
+            return results
+
+    class PiiRoadmapAgent(FakeRoadmapAgent):
+        def run(self, result):
+            roadmap = super().run(result)
+            return roadmap.model_copy(update={"summary": f"Roadmap for {email}, {phone}."})
+
+    verifier_result = VerificationResult(
+        status="FAIL",
+        checks=[VerificationCheck(
+            check="semantic.occupational_claims", status="FAIL",
+            reason=f"Review claim {email} and proficiency {phone}.",
+        )],
+        required_revision=[f"Review {email} and {phone}."],
+    )
+    verifier = FakeVerifier([verifier_result])
+    workflow, _ = make_workflow(
+        career_recommendation_agent=PiiRecommendationAgent(),
+        skill_gap_agent=FakeGapAgent(analysis),
+        learning_roadmap_agent=PiiRoadmapAgent(),
+        verification_agent=verifier,
+    )
+    original_gap = gap.model_dump()
+    direct_state = workflow.run(user_id=17)
+    assert direct_state["skill_gap"].skill_gap.model_dump() == original_gap
+
+    client, _ = make_client(workflow)
+    response = client.post("/analysis/profile", json={"user_id": 17})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["skill_gap"]["skill_gap"]["matched_claimed_only"][0]["skill_id"] == "S001"
+    assert body["skill_gap"]["skill_gap"]["matched_claimed_only"][0]["canonical_name"] == "SQL"
+    assert body["skill_gap"]["skill_gap"]["matched_claimed_only"][0]["status"] == "matched_claimed_only"
+
+    for recommendations, verified_gap, roadmap in verifier.calls:
+        captured = repr((recommendations, verified_gap, roadmap))
+        assert email not in captured and phone not in captured
+        assert "[REDACTED_EMAIL]" in captured and "[REDACTED_PHONE]" in captured
+    for value in (email, phone):
+        assert value not in response.text
+        assert value not in caplog.text
+    assert "SQL" in response.text
 
 
 def test_settings_from_env(monkeypatch):

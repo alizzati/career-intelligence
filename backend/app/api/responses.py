@@ -5,6 +5,10 @@ from app.api.errors import ApiError
 from app.schemas.api import (
     AnalysisResponse, DocumentInfo, ProfileExtractionSummary, RedactionInfo,
 )
+from app.services.profile_privacy_service import (
+    redact_recommendations, redact_roadmap, redact_skill_gap_analysis,
+    redact_verification,
+)
 
 LLM_ERROR_OMITTED = "An LLM step failed or its output was rejected; details omitted."
 
@@ -41,10 +45,19 @@ def build_analysis_response(state, *, user_id, source, document=None, redaction=
             replacement_count=redaction.replacement_count,
         ) if redaction else None,
         profile_extraction=summary,
-        recommendations=state.get("recommendations") or [],
-        skill_gap=_omit_llm_error(state.get("skill_gap")),
-        roadmap=_omit_llm_error(state.get("roadmap")),
-        verification=_omit_llm_error(state.get("verification")),
+        recommendations=redact_recommendations(state.get("recommendations") or []),
+        skill_gap=(
+            _omit_llm_error(redact_skill_gap_analysis(state["skill_gap"]))
+            if state.get("skill_gap") is not None else None
+        ),
+        roadmap=(
+            _omit_llm_error(redact_roadmap(state["roadmap"]))
+            if state.get("roadmap") is not None else None
+        ),
+        verification=(
+            _omit_llm_error(redact_verification(state["verification"]))
+            if state.get("verification") is not None else None
+        ),
     )
 
 

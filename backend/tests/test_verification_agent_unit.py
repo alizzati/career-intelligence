@@ -242,6 +242,35 @@ def test_all_deterministic_outputs_pass_without_llm_call():
     assert after == before
 
 
+def test_semantic_llm_receives_redacted_user_derived_narrative_text():
+    email = "semantic.synthetic@example.test"
+    phone = "0812-5555-0199"
+    recommendations, analysis, roadmap, _ = make_outputs()
+    recommendations[0] = recommendations[0].model_copy(update={
+        "reasoning": f"Profile claim {email}, contact {phone}.",
+        "reasoning_source": "llm",
+    })
+    analysis = analysis.model_copy(update={
+        "narrative": analysis.narrative.model_copy(update={
+            "summary": f"Claim {email}; proficiency {phone}.",
+        }),
+        "narrative_source": "llm",
+    })
+    roadmap = roadmap.model_copy(update={
+        "summary": f"Roadmap derived from {email} and {phone}.",
+        "narrative_source": "llm",
+    })
+    llm = ScriptedLLM({"unsupported_claims": []})
+
+    run_agent(recommendations, analysis, roadmap, llm)
+
+    assert llm.calls
+    prompt = llm.calls[0][1]
+    assert email not in prompt and phone not in prompt
+    assert "[REDACTED_EMAIL]" in prompt and "[REDACTED_PHONE]" in prompt
+    assert "Backend Engineer" in prompt and "SQL" in prompt
+
+
 def test_recommendation_score_tampering_fails_deterministic_check():
     recommendations, gap, roadmap, _ = make_outputs()
     changed = recommendations[0].model_copy(update={"fit_score": 0.1234})

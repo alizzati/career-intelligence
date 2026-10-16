@@ -33,6 +33,8 @@ from app.agents.skill_gap_grounding import (
 from app.schemas.skill_gap import SkillGapResult
 from app.schemas.skill_gap_agent import SkillGapAnalysisOut
 from app.services import retrieval_service as rs
+from app.services.pii_redaction_service import redact_pii
+from app.services.profile_privacy_service import redact_skill_gap_analysis
 from app.services.skill_gap_service import analyze_skill_gap
 
 LLM_MAX_TOKENS = 1500
@@ -80,8 +82,13 @@ def build_user_prompt(gap: SkillGapResult) -> str:
              "evidence_class": item.evidence_class, "kb_confidence": item.kb_confidence}
         if item.matched_user_claim:
             c = item.matched_user_claim
-            d["user_claim"] = {"claimed_as": c.claimed_skill, "self_reported_proficiency": c.proficiency,
-                               "linked_evidence_count": c.evidence_count}
+            d["user_claim"] = {
+                "claimed_as": redact_pii(c.claimed_skill).redacted_text,
+                "self_reported_proficiency": (
+                    redact_pii(c.proficiency).redacted_text if c.proficiency is not None else None
+                ),
+                "linked_evidence_count": c.evidence_count,
+            }
         return d
 
     results = {
@@ -91,8 +98,14 @@ def build_user_prompt(gap: SkillGapResult) -> str:
         "matched_claimed_only": [required(i) for i in gap.matched_claimed_only],
         "missing": [required(i) for i in gap.missing],
         "unmatched_user_claims": [
-            {"user_skill_id": u.user_skill_id, "claimed_as": u.claimed_skill,
-             "self_reported_proficiency": u.proficiency, "linked_evidence_count": u.evidence_count}
+            {
+                "user_skill_id": u.user_skill_id,
+                "claimed_as": redact_pii(u.claimed_skill).redacted_text,
+                "self_reported_proficiency": (
+                    redact_pii(u.proficiency).redacted_text if u.proficiency is not None else None
+                ),
+                "linked_evidence_count": u.evidence_count,
+            }
             for u in gap.unmatched_user_claims],
     }
     return (
@@ -141,9 +154,9 @@ class SkillGapAgent:
     def explain(self, gap: SkillGapResult) -> SkillGapAnalysisOut:
         """Narrative for an existing Step 9 result. `gap` is read, never modified."""
         if self.llm_client is None:
-            return SkillGapAnalysisOut(
+            return redact_skill_gap_analysis(SkillGapAnalysisOut(
                 skill_gap=gap, narrative=build_fallback_narrative(gap), narrative_source="fallback-template",
-            )
+            ), redact_claims=False)
 
         try:
             raw = self.llm_client.complete_json(
@@ -159,16 +172,16 @@ class SkillGapAgent:
         except NarrativeFormatError as exc:
             return self._failed(gap, f"invalid structured LLM output: {exc}", exc)
 
-        return SkillGapAnalysisOut(
+        return redact_skill_gap_analysis(SkillGapAnalysisOut(
             skill_gap=gap, narrative=outcome.narrative,
             narrative_source="llm-partial" if outcome.degraded else "llm",
             validation_notes=outcome.notes,
-        )
+        ), redact_claims=False)
 
     def _failed(self, gap: SkillGapResult, message: str, cause: Exception) -> SkillGapAnalysisOut:
         if self.strict_llm:
             raise NarrativeGenerationError(message) from cause
-        return SkillGapAnalysisOut(
+        return redact_skill_gap_analysis(SkillGapAnalysisOut(
             skill_gap=gap, narrative=build_fallback_narrative(gap),
-            narrative_source="fallback-template", llm_error=message,
-        )
+            narrative_source="fallback-template", llm_error=redact_pii(message).redacted_text,
+        ), redact_claims=False)

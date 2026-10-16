@@ -195,18 +195,26 @@ def fetch_certifications(conn: Connection, user_id: int) -> list[dict]:
 def create_user_skill(conn: Connection, user_id: int, claimed_skill: str,
                        skill_id: str | None, normalized_skill: str | None,
                        proficiency: str | None) -> dict:
-    row = conn.execute(text("""
+    return _insert_or_fetch(
+        conn,
+        """
         INSERT INTO user_skills (user_id, claimed_skill, skill_id, normalized_skill, proficiency,
                                  evidence_status, confidence)
         VALUES (:uid, :claimed, :sid, :norm, :prof, 'none', 'unknown')
-        ON CONFLICT (user_id, claimed_skill) DO UPDATE
-        SET skill_id = EXCLUDED.skill_id, normalized_skill = EXCLUDED.normalized_skill,
-            proficiency = EXCLUDED.proficiency
+        ON CONFLICT (user_id, claimed_skill) DO NOTHING
         RETURNING user_skill_id, claimed_skill, skill_id, normalized_skill, proficiency,
                   evidence_status, confidence
-    """), {"uid": user_id, "claimed": claimed_skill, "sid": skill_id,
-           "norm": normalized_skill, "prof": proficiency}).mappings().first()
-    return dict(row)
+        """,
+        """
+        SELECT user_skill_id, claimed_skill, skill_id, normalized_skill, proficiency,
+               evidence_status, confidence
+        FROM user_skills
+        WHERE user_id = :uid AND claimed_skill = :claimed
+        """,
+        {"uid": user_id, "claimed": claimed_skill, "sid": skill_id,
+         "norm": normalized_skill, "prof": proficiency},
+        ("uid", "claimed"),
+    )
 
 
 def fetch_user_skills(conn: Connection, user_id: int) -> list[dict]:
