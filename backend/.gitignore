@@ -12,4 +12,6 @@ venv/
 *.sqlite
 *.sqlite3
 
+node_modules/
+frontend/node_modules/
 uploads/

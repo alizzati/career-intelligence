@@ -11,7 +11,7 @@ The system supports:
 3. Personalized learning roadmap generation.
 4. Verification of consistency and knowledge grounding.
 
-The system uses an Occupational Knowledge Base grounded in available occupational and competency sources, such as KBJI, SKKNI, ESCO, O*NET, and IndoTask, depending on the data actually available in the repository.
+The system uses an Occupational Knowledge Base grounded in available occupational and competency sources, such as KBJI, SKKNI, and IndoTask, depending on the data actually available in the repository.
 
 ## 2. Working Principles
 

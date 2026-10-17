@@ -31,8 +31,43 @@ Step 13's focused tests and local workflow integration run passed.
 
 Steps 14.2 and 14.3 are complete. The database-backed runtime tests use the
 local `career_intelligence` database through FastAPI's TestClient and fake
-LLMs; they do not establish live Gemini integration or a network-served Uvicorn
-analysis.
+LLMs; they do not establish live Gemini integration. Local Uvicorn liveness,
+Vite proxy health, and synthetic API user creation were separately checked
+over HTTP.
+
+## Local Full-Stack Runtime Check (2026-10-18)
+
+* Added direct backend runtime dependencies missing from
+  `backend/requirements.txt`: Pydantic, SQLAlchemy, the PostgreSQL psycopg2
+  driver, python-dotenv, and Google Gen AI SDK. Added `requirements-dev.txt`
+  for pytest and a secret-free `.env.example` describing local DB, LLM, and
+  development-only API acknowledgement settings.
+* Python 3.13.0 successfully installed the declared dependencies; `app.main`
+  imports, and `pip check` reports no broken requirements. No Python-version
+  switch was required.
+* The existing React/Vite API client already uses `/api` and the Vite proxy
+  targets `127.0.0.1:8000`, matching FastAPI paths and the loopback policy.
+  No API-path or port changes were needed.
+* Tests run:
+  * From `backend`: `$env:CAREER_RUN_RUNTIME_DB_TESTS='1'; .\.venv\Scripts\python.exe -m pytest -q`
+    — **160 passed, 1 LangChain pending-deprecation warning**. This includes
+    opt-in local PostgreSQL/Knowledge Base runtime tests using synthetic users
+    and fake LLM clients.
+  * From `frontend`: `npm run typecheck` — passed; `npm test` — **1 file,
+    7 tests passed**; `npm run build` — passed.
+* Live HTTP checks: Uvicorn started on `127.0.0.1:8000`; `GET /health`
+  returned HTTP 200 with `{"status":"ok"}`. `GET /openapi.json` showed
+  `/health` GET and `/analysis/users`, `/analysis/profile`, `/analysis/cv`
+  POST routes. Vite served `/` with HTTP 200 and `GET
+  http://localhost:5173/api/health` returned HTTP 200 through the configured
+  proxy. A synthetic user was created through the running API (HTTP 201),
+  confirmed persisted, then deleted by its exact returned ID and synthetic
+  email.
+* Analysis was exercised against the local DB/Knowledge Base using the real
+  workflow and fake LLM clients in the runtime suite. No live/paid Gemini
+  request was made; a live model-backed analysis therefore remains unverified.
+  API routes fail closed unless `CAREER_API_ACKNOWLEDGE_NO_AUTH=true`; keep the
+  service bound to loopback because this is not authentication.
 
 ## Frozen Constraints
 
@@ -76,7 +111,8 @@ analysis.
 
 1. Review logging, reproducibility, and evaluation support.
 2. Implement and evaluate baseline and ablation configurations.
-3. Implement or review frontend integration.
+3. Review live LLM-backed analysis only when explicitly approved; current
+   database-backed analysis regression tests use fake LLM clients.
 
 ## Step 12 Verification Record
 
