@@ -286,6 +286,35 @@ def test_health_endpoint_is_available_from_the_application(local_database):
     assert response.json() == {"status": "ok"}
 
 
+def test_user_creation_endpoint_persists_synthetic_user_and_returns_only_id(local_database):
+    email = f"runtime-create-{uuid.uuid4().hex}@example.invalid"
+    client = make_client(make_real_workflow(FakeLLM()))
+    created_user_id = None
+    try:
+        response = client.post(
+            "/analysis/users",
+            json={"email": email, "full_name": "Synthetic API User"},
+        )
+
+        assert response.status_code == 201
+        assert set(response.json()) == {"user_id"}
+        created_user_id = response.json()["user_id"]
+        with local_database.connect() as conn:
+            stored_email = conn.execute(
+                text("SELECT email FROM users WHERE user_id = :user_id"),
+                {"user_id": created_user_id},
+            ).scalar_one()
+        assert stored_email == email
+    finally:
+        if created_user_id is not None:
+            with local_database.begin() as conn:
+                result = conn.execute(
+                    text("DELETE FROM users WHERE user_id = :user_id"),
+                    {"user_id": created_user_id},
+                )
+            assert result.rowcount == 1
+
+
 def test_cv_upload_runs_real_database_workflow_and_repeat_is_idempotent(
     test_user, caplog,
 ):
