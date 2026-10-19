@@ -1,6 +1,15 @@
 """Centralized, env-overridable API settings. Contains no secrets."""
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # python-dotenv is optional here
+    load_dotenv = None
+
+if load_dotenv is not None:
+    load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
 
 from app.services.cv_text_extraction_service import (
     DEFAULT_MAX_FILE_SIZE_BYTES,
