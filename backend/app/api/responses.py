@@ -1,6 +1,7 @@
 """Builds API-safe responses from workflow state. Never returns profile_result,
 redacted/raw text, or raw exception messages."""
 from app.agents.profile_agent import ProfileAgentResult
+from app.agents.llm_errors import LLMInvalidResponseError, LLMQuotaExceededError
 from app.api.errors import ApiError
 from app.schemas.api import (
     AnalysisResponse, DocumentInfo, ProfileExtractionSummary, RedactionInfo,
@@ -67,6 +68,20 @@ def finish(state, **kwargs):
         stage = err.get("stage") or "workflow"
         if stage == "input_validation":
             raise ApiError(400, "invalid_request", "The request parameters were rejected.", stage=stage)
+        if err.get("error_type") == LLMQuotaExceededError.__name__:
+            raise ApiError(
+                503,
+                "llm_quota_exceeded",
+                "AI analysis is temporarily unavailable because the model quota has been reached. Please try again later.",
+                stage=stage,
+            )
+        if err.get("error_type") == LLMInvalidResponseError.__name__:
+            raise ApiError(
+                502,
+                "llm_invalid_response",
+                "AI analysis could not process the model response. Please try again later.",
+                stage=stage,
+            )
         raise ApiError(500, "workflow_error",
                        f"The analysis could not be completed (stage: {stage}).",
                        stage=stage, error_type=err.get("error_type"))

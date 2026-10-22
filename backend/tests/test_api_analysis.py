@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from starlette.datastructures import UploadFile
 
 from app.agents.profile_agent import ProfileAgent
+from app.agents.llm_errors import LLMInvalidResponseError, LLMQuotaExceededError
 from app.api.dependencies import get_llm_client, get_workflow
 from app.api.errors import ApiError
 from app.api.uploads import read_upload_bounded
@@ -326,6 +327,61 @@ def test_workflow_errors_return_safe_500_without_internal_text():
     response = client.post("/analysis/profile", json={"user_id": 17})
     assert response.status_code == 500 and response.json()["error"]["stage"] == "verification"
     assert "SECRET" not in response.text and "Traceback" not in response.text
+
+
+@pytest.mark.parametrize(
+    ("error", "status", "code", "message_fragment"),
+    [
+        (
+            LLMQuotaExceededError(),
+            503,
+            "llm_quota_exceeded",
+            "model quota has been reached",
+        ),
+        (
+            LLMInvalidResponseError(),
+            502,
+            "llm_invalid_response",
+            "could not process the model response",
+        ),
+    ],
+)
+def test_profile_llm_failures_return_safe_actionable_errors(
+    error, status, code, message_fragment,
+):
+    client, _ = make_client(make_workflow(profile_agent=FakeProfileAgent(error=error))[0])
+
+    response = upload(client, TXT, "cv.txt")
+
+    assert response.status_code == status
+    assert response.json()["error"]["code"] == code
+    assert response.json()["error"]["stage"] == "profile_analysis"
+    assert message_fragment in response.json()["error"]["message"]
+    assert "synthetic" not in response.text
+
+
+def test_cv_route_reports_quota_failure_from_real_profile_agent_without_pii(caplog):
+    class QuotaLLM:
+        def complete_json(self, system, user, max_tokens=2000):
+            assert "Sinta Contoh" not in user
+            assert "sinta@example.test" not in user
+            raise LLMQuotaExceededError() from None
+
+    workflow, _ = make_workflow(profile_agent=ProfileAgent(QuotaLLM()))
+    client, _ = make_client(workflow)
+
+    with (
+        mock.patch("app.agents.profile_agent.rs.get_all_skills", return_value=[]),
+        caplog.at_level(logging.DEBUG),
+    ):
+        response = upload(client, RAW.encode(), "synthetic.txt")
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "llm_quota_exceeded"
+    assert response.json()["error"]["stage"] == "profile_analysis"
+    assert "synthetic provider details" not in response.text + caplog.text
+    for value in SENSITIVE:
+        assert value not in response.text + caplog.text.lower()
 
 
 def test_llm_unavailable_returns_503_without_any_provider_call():

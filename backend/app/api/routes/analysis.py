@@ -24,7 +24,7 @@ from app.core.db import DatabaseConfigurationError
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
-_ERRORS = {code: {"model": ErrorResponse} for code in (400, 404, 413, 415, 422, 500, 503)}
+_ERRORS = {code: {"model": ErrorResponse} for code in (400, 404, 413, 415, 422, 500, 502, 503)}
 _EXTRACTION_STATUS = {
     "unsupported_format": 415,
     "file_too_large": 413,

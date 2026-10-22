@@ -24,7 +24,7 @@ from app.services import retrieval_service as rs
 from app.services import user_service as us
 from app.services.pii_redaction_service import redact_pii, redact_structured_value
 
-
+EXTRACTION_MAX_TOKENS = 8192
 EXTRACTION_SYSTEM_PROMPT = """You are an information-extraction component in a career intelligence \
 system. You extract structured facts from a candidate's free-text profile/CV. You do NOT evaluate, \
 score, or recommend careers. You do NOT invent skills, employers, dates, or credentials that are not \
@@ -85,6 +85,7 @@ class ProfileAgent:
         extracted = self.llm_client.complete_json(
             system=EXTRACTION_SYSTEM_PROMPT,
             user=self._build_user_prompt(profile_text, skill_catalog),
+            max_tokens=EXTRACTION_MAX_TOKENS,
         )
         extracted = redact_structured_value(extracted)
 
@@ -105,21 +106,7 @@ class ProfileAgent:
             us.add_certification(user_id, **_only(cert, ["name", "issuer", "issue_date",
                                                            "expiry_date", "credential_url"]))
 
-        # --- normalize + persist sanitized skill claims regardless of match outcome ---
-        #
-        # *** B1 FIX ***
-        # The lookup key used to re-associate evidence with a skill claim is
-        # INTERNAL ONLY -- built via skill_normalizer._norm() (case/whitespace
-        # -insensitive). This is matching-key normalization, not semantic
-        # normalization: it does not use fuzzy similarity or the LLM, it only
-        # makes "Database Management" / "database management" / "DATABASE
-        # MANAGEMENT" collide as the same internal key so evidence attaches
-        # correctly regardless of minor casing/whitespace differences across
-        # the two LLM-produced JSON arrays. The stored `claimed_skill` column
-        # is NEVER touched by this -- it stays exactly what was provided in
-        # the already-redacted `skills[]` array. evidence_status is changed ONLY
-        # by user_service.add_skill_evidence() actually persisting a row --
-        # never inferred directly from LLM output.
+    
         user_skill_ids_by_claim: dict[str, int] = {}
         for skill_claim in extracted.get("skills", []):
             claimed = skill_claim["claimed_skill"]

@@ -20,10 +20,30 @@ export const Unavailable = ({ what, why }: { what: string; why: string }) => (
 
 export function ErrorAlert({ error }: { error: unknown }) {
   const e = error instanceof ApiRequestError ? error : null;
+  const title = e?.kind === "network"
+    ? "Network error"
+    : e?.code === "llm_quota_exceeded"
+      ? "AI service temporarily unavailable"
+      : e?.code === "llm_invalid_response"
+        ? "AI response could not be processed"
+        : e
+          ? `Request rejected (HTTP ${e.status}${e.code ? `, ${e.code}` : ""})`
+          : "Unexpected error";
+  const stage = e?.stage === "profile_analysis"
+    ? "during CV profile extraction"
+    : e?.stage === "career_recommendation"
+      ? "during career recommendation"
+      : e?.stage === "skill_gap_analysis"
+        ? "during skill-gap analysis"
+        : e?.stage === "learning_roadmap"
+          ? "during roadmap generation"
+          : e?.stage === "verification"
+            ? "during verification"
+            : e?.stage;
   return (
     <div className="banner bad" role="alert">
-      <strong>{e?.kind === "network" ? "Network error" : e ? `Request rejected (HTTP ${e.status}${e.code ? `, ${e.code}` : ""})` : "Unexpected error"}</strong>
-      <div>{e?.message ?? "Something went wrong."}{e?.stage ? ` Stage: ${e.stage}.` : ""}</div>
+      <strong>{title}</strong>
+      <div>{e?.message ?? "Something went wrong."}{stage ? ` Stage: ${stage}.` : ""}</div>
     </div>
   );
 }

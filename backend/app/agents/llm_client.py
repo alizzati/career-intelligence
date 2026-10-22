@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+from app.agents.llm_errors import LLMInvalidResponseError, LLMQuotaExceededError
+
 
 class LLMClient(Protocol):
     def complete_json(
@@ -29,7 +31,7 @@ class GeminiClient:
         self.model = (
             model
             or os.environ.get("CAREER_LLM_MODEL")
-            or "gemini-2.5-flash"
+            or "gemini-3.8-flash"
         )
         self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
 
@@ -44,22 +46,30 @@ class GeminiClient:
     def complete_json(
         self, system: str, user: str, max_tokens: int = 2000
     ) -> dict:
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents=user,
-            config=types.GenerateContentConfig(
-                system_instruction=system,
-                response_mime_type="application/json",
-                max_output_tokens=max_tokens,
-            ),
-        )
+        try:
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=user,
+                config=types.GenerateContentConfig(
+                    system_instruction=system,
+                    response_mime_type="application/json",
+                    max_output_tokens=max_tokens,
+                ),
+            )
+        except Exception as exc:
+            if getattr(exc, "code", None) == 429:
+                raise LLMQuotaExceededError() from None
+            raise
 
         raw = (response.text or "").strip()
         if not raw:
-            raise ValueError("Gemini returned an empty response.")
+            raise LLMInvalidResponseError()
 
-        result = json.loads(raw)
+        try:
+            result = json.loads(raw)
+        except json.JSONDecodeError:
+            raise LLMInvalidResponseError() from None
         if not isinstance(result, dict):
-            raise ValueError("Gemini response must be a JSON object.")
+            raise LLMInvalidResponseError()
 
         return result

@@ -16,6 +16,19 @@ describe("api client (contract tests with mocked fetch; not end-to-end)", () => 
     expect(err).toBeInstanceOf(ApiRequestError);
     expect(err).toMatchObject({ kind: "http", status: 404, code: "user_not_found", message: "no user" });
   });
+  it("quota errors preserve the actionable backend message", async () => {
+    vi.stubGlobal("fetch", reply(503, { error: {
+      code: "llm_quota_exceeded",
+      message: "AI analysis is temporarily unavailable because the model quota has been reached. Please try again later.",
+      stage: "profile_analysis",
+    } }));
+    const err = await analyzeCv(5, new File(["synthetic"], "cv.txt")).catch(e => e);
+    expect(err).toMatchObject({
+      kind: "http", status: 503, code: "llm_quota_exceeded",
+      stage: "profile_analysis",
+      message: "AI analysis is temporarily unavailable because the model quota has been reached. Please try again later.",
+    });
+  });
   it("non-JSON error body still yields an http error", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 502, json: async () => { throw new Error("x"); } }));
     await expect(analyzeProfile(1)).rejects.toMatchObject({ kind: "http", status: 502 });
