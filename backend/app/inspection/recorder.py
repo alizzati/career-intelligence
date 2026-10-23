@@ -26,6 +26,13 @@ STR_LIMIT = 600
 _SECRET = re.compile(
     r"(AIza[0-9A-Za-z_\-]{20,}|sk-[A-Za-z0-9_\-]{20,}|(?i:api[_-]?key|secret|password)\s*[:=]\s*\S+)"
 )
+# Hex digests (sha256, git SHA) are identifiers, not PII. Without this exemption a digest that
+# contains exactly 16 consecutive decimal digits is rewritten by the Indonesian-ID redaction pattern.
+# The lookahead requires at least one a-f letter so an all-digit number is still redacted.
+_DIGEST = re.compile(r"(?=[0-9]*[a-fA-F])[0-9a-fA-F]{32,128}")
+# Identifier-like dictionary keys are structure, not content: keep them byte-for-byte.
+_SAFE_KEY = re.compile(r"[A-Za-z0-9_.:\-]{1,120}")
+_LONG_DIGITS = re.compile(r"\d{9,}")
 
 KB_READS = ("get_all_skills", "get_all_careers", "get_career", "get_career_skills",
             "get_occupations_for_career", "get_occupation_competencies",
@@ -50,10 +57,22 @@ def sha256_text(value: str) -> str:
 
 
 def clean_str(value: str, limit: int = STR_LIMIT) -> str:
+    """PII/secret-redacted, length-capped copy. ALWAYS returns a str (never None)."""
+    if not isinstance(value, str):
+        value = str(value)
+    if _DIGEST.fullmatch(value):
+        return value
     text = _SECRET.sub("[REDACTED_SECRET]", redact_pii(value).redacted_text)
     if len(text) > limit:
         return f"{text[:limit]}...[truncated; {len(text)} chars; sha256:{sha256_text(text)[:12]}]"
     return text
+
+
+def _clean_key(key: Any) -> str:
+    text = str(key)
+    if _SAFE_KEY.fullmatch(text) and not _LONG_DIGITS.search(text):
+        return text
+    return clean_str(text, 120)
 
 
 def to_jsonable(obj: Any, *, str_limit: int = STR_LIMIT, _depth: int = 0) -> Any:
@@ -74,7 +93,16 @@ def to_jsonable(obj: Any, *, str_limit: int = STR_LIMIT, _depth: int = 0) -> Any
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
         return to_jsonable(dataclasses.asdict(obj), **kw)
     if isinstance(obj, dict):
-        return {clean_str(str(k), 120): to_jsonable(v, **kw) for k, v in obj.items()}
+        out: dict[str, Any] = {}
+        for k, v in obj.items():
+            name = _clean_key(k)
+            if name in out:                      # never silently overwrite a colliding key
+                n = 2
+                while f"{name}#{n}" in out:
+                    n += 1
+                name = f"{name}#{n}"
+            out[name] = to_jsonable(v, **kw)
+        return out
     if isinstance(obj, (list, tuple, set, frozenset)):
         return [to_jsonable(v, **kw) for v in obj]
     return {"unserializable_type": type(obj).__name__}

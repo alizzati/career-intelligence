@@ -14,7 +14,7 @@ from importlib import metadata
 
 from app.inspection.recorder import Recorder, clean_str, sha256_text, to_jsonable
 
-SCHEMA_VERSION = "manual_validation/0.2"
+SCHEMA_VERSION = "manual_validation/0.3"
 PRIVACY_NOTICE = (
     "Contains structured data derived from the submitted CV (skills, education, experience, ...). "
     "CV text, full prompts, raw LLM responses, API keys, account e-mail and file names are NOT stored; "
@@ -103,13 +103,20 @@ def _unsupported_claims(values):
 
 
 def _safe_context_values(value, allowed_keys):
+    """Allowlisted scalar values only. A key that is absent is OMITTED (never invented, never an
+    error); non-scalar values are dropped; strings are redacted."""
     if not isinstance(value, dict):
         return {}
-    return {
-        key: clean_str(value[key], 160) if isinstance(value[key], str) else value[key]
-        for key in allowed_keys
-        if isinstance(value.get(key), (str, int, float, bool)) or value.get(key) is None
-    }
+    safe = {}
+    for key in allowed_keys:
+        if key not in value:
+            continue
+        item = value[key]
+        if isinstance(item, str):
+            safe[key] = clean_str(item, 160)
+        elif item is None or isinstance(item, (bool, int, float)):
+            safe[key] = item
+    return safe
 
 
 def _safe_document(value):
@@ -331,7 +338,8 @@ def _out_roadmap(rec, run):
         unchanged = _g(o, "skill_gap").model_dump() == _gap_of(gr["raw_output"]).model_dump()
     return {"items": to_jsonable(_g(o, "items", []), str_limit=300),
             "summary": _text_fingerprint(_g(o, "summary")),
-            "narrative_source": _g(o, "narrative_source"),             "llm_error": _g(o, "llm_error") is not None,
+            "narrative_source": _g(o, "narrative_source"),
+            "llm_error": _g(o, "llm_error") is not None,
             "embedded_skill_gap_equals_skill_gap_output": unchanged}
 
 
@@ -446,6 +454,8 @@ def _safe_agent_output(rec, key, run):
 
 
 def _revision_transitions(rec, trace):
+    """One entry per verification_decision event. Entries whose revision_target is None record the
+    FINAL decision (e.g. VERIFIED), not a routed revision."""
     agent_for_target = {
         "career_recommendation": "career_recommendation",
         "skill_gap": "skill_gap",
@@ -754,6 +764,7 @@ def c_llm_labels(rec, ctx):
     name = "narrative_source_labels_vs_recorded_llm_calls"
     ref = "LLM call log recorded by RecordingLLMClient, per stage"
     problems, seen = [], {}
+
     def ok_calls(stage):
         return sum(1 for e in rec.llm if e["stage"] == stage and e["error"] is None)
     rr, gr, roadr = _last(rec, "career_recommendation"), _last(rec, "skill_gap"), _last(rec, "roadmap")
@@ -800,6 +811,7 @@ def build_artifact(rec: Recorder, ctx: dict) -> dict:
         {"agent": section, "attempts": len(_runs(rec, key))}
         for key, section in AGENT_SECTIONS.items()
     ]
+    kb_before, kb_after = ctx.get("kb_counts_before"), ctx.get("kb_counts_after")
     artifact = {
         "schema_version": SCHEMA_VERSION, "privacy_notice": PRIVACY_NOTICE, "data_source_legend": LEGEND,
         "run_metadata": {
@@ -837,11 +849,11 @@ def build_artifact(rec: Recorder, ctx: dict) -> dict:
             },
             "scoring_weights": to_jsonable(ctx.get("scoring_weights")),
             "versions": _safe_context_values(ctx.get("versions"), ("python", "google_genai_sdk")),
-            "kb_counts_before": _safe_context_values(ctx.get("kb_counts_before"), (
+            "kb_counts_before": _safe_context_values(kb_before, (
                 "careers", "skills", "career_skills", "occupations", "sources")),
-            "kb_counts_after": _safe_context_values(ctx.get("kb_counts_after"), (
+            "kb_counts_after": _safe_context_values(kb_after, (
                 "careers", "skills", "career_skills", "occupations", "sources")),
-            "kb_unchanged": ctx.get("kb_counts_before") == ctx.get("kb_counts_after"),
+            "kb_unchanged": (kb_before == kb_after if kb_before and kb_after else "unavailable"),
             "kb_version": "unavailable (not exposed by the implementation; Step 16 scope)",
             "git_commit": (
                 ctx["git_commit"] if isinstance(ctx.get("git_commit"), str)
@@ -861,6 +873,10 @@ def build_artifact(rec: Recorder, ctx: dict) -> dict:
         "execution_trace": trace,
         **{section: _agent_section(rec, key, ctx) for key, section in AGENT_SECTIONS.items()},
         "cross_stage_checks": run_checks(rec, ctx),
+        "independent_reference_checks": (
+            to_jsonable(ctx["independent_checks"], str_limit=300)
+            if ctx.get("independent_checks") is not None else "unavailable"
+        ),
         "final_output": {"final_status": fs.get("final_status"), "verified": fs.get("final_status") == "VERIFIED",
                          "revision_count": fs.get("revision_count"), "target_career_id": fs.get("target_career_id"),
                          "errors": _safe_errors(fs.get("errors", [])),
