@@ -1,5 +1,8 @@
 """Step 13: stateful orchestration for the existing career agents."""
-from typing import Literal, NotRequired, TypedDict
+import logging
+import os
+import re
+from typing import Callable, Literal, NotRequired, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
@@ -20,6 +23,59 @@ from app.services.profile_privacy_service import (
 )
 from app.services import retrieval_service as rs
 from app.services import user_service as us
+
+logger = logging.getLogger(__name__)
+_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+
+
+def _safe_log_component(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.]", "_", value)[:160]
+
+
+def _log_workflow_failure(stage: str, exc: Exception) -> None:
+    diagnostics_enabled = (
+        os.environ.get("CAREER_API_DIAGNOSTIC_LOGGING", "").strip().lower()
+        in _TRUE_VALUES
+    )
+    remote_clients_enabled = (
+        os.environ.get("CAREER_API_ALLOW_REMOTE_CLIENTS", "").strip().lower()
+        in _TRUE_VALUES
+    )
+    if not diagnostics_enabled or remote_clients_enabled:
+        return
+
+    exception_type = type(exc)
+    provider_code = getattr(exc, "code", None)
+    provider_status = getattr(exc, "status_code", None)
+    if type(provider_code) is not int:
+        provider_code = None
+    if type(provider_status) is not int:
+        provider_status = None
+
+    frames = []
+    traceback = exc.__traceback__
+    while traceback is not None:
+        frame = traceback.tb_frame
+        filename = os.path.basename(frame.f_code.co_filename)
+        function = frame.f_code.co_name
+        location = (
+            f"{_safe_log_component(filename)}:"
+            f"{_safe_log_component(function)}:{traceback.tb_lineno}"
+        )
+        frames.append(location)
+        traceback = traceback.tb_next
+    frame_locations = ",".join(frames[-12:]) or "unavailable"
+
+    logger.error(
+        "Workflow stage failed: stage=%s exception=%s.%s "
+        "provider_code=%s provider_status=%s frames=%s",
+        _safe_log_component(stage),
+        _safe_log_component(exception_type.__module__),
+        _safe_log_component(exception_type.__name__),
+        provider_code if provider_code is not None else "unavailable",
+        provider_status if provider_status is not None else "unavailable",
+        frame_locations,
+    )
 
 
 WorkflowFinalStatus = Literal[
@@ -112,6 +168,7 @@ class CareerWorkflow:
         *,
         safe_message: str | None = None,
     ) -> dict:
+        _log_workflow_failure(stage, exc)
         return {
             "stage": stage,
             "final_status": "ERROR",
@@ -413,6 +470,7 @@ class CareerWorkflow:
         user_id: int,
         target_career_id: str | None = None,
         raw_profile_text: str | None = None,
+        observer: Callable[[str, dict], None] | None = None,
     ) -> CareerWorkflowState:
         """Run the compiled graph and return all original outputs plus findings."""
         initial_state: CareerWorkflowState = {
@@ -454,7 +512,26 @@ class CareerWorkflow:
         if raw_profile_text is not None:
             initial_state["redacted_profile_text"] = redact_pii(raw_profile_text).redacted_text
         try:
-            result = self.graph.invoke(initial_state)
+            if observer is None:
+                result = self.graph.invoke(initial_state)
+            else:
+                result = None
+                for mode, chunk in self.graph.stream(
+                    initial_state, stream_mode=["updates", "values"]
+                ):
+                    if mode == "values":
+                        result = chunk
+                    elif mode == "updates" and isinstance(chunk, dict):
+                        for node, update in chunk.items():
+                            try:
+                                observer("node_update", {"node": node, "update": update})
+                            except Exception as exc:
+                                logger.warning(
+                                    "Workflow inspection observer failed (%s).",
+                                    type(exc).__name__,
+                                )
+                if result is None:
+                    raise RuntimeError("Observed workflow completed without a final state.")
             result.pop("redacted_profile_text", None)
             return result
         except Exception as exc:

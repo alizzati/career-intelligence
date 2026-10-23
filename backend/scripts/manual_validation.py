@@ -1,7 +1,7 @@
-"""Run a synthetic, FakeLLM-backed CV through the real FastAPI workflow.
+"""Run synthetic FakeLLM input through the real FastAPI workflow.
 
-This temporary diagnostic captures allowlisted stage snapshots only. It never
-records prompts, credentials, raw CV text, account email, or full user records.
+The shared inspection artifact is the only persisted trace. Temporary raw
+objects used for in-process cross-stage checks are not written to disk.
 """
 from __future__ import annotations
 
@@ -12,8 +12,10 @@ import json
 import logging
 import os
 import sys
+import subprocess
 import uuid
 from datetime import datetime, timezone
+from importlib import metadata
 from pathlib import Path
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -28,12 +30,18 @@ from app.agents.learning_roadmap_agent import LearningRoadmapAgent
 from app.agents.profile_agent import ProfileAgent
 from app.agents.skill_gap_agent import SkillGapAgent
 from app.agents.verification_agent import VerificationAgent
+from app.agents import career_recommendation_agent as career_agent_module
+from app.agents import verification_agent as verification_agent_module
 from app.api.dependencies import get_workflow
 from app.core.config import get_settings
 from app.core.db import get_engine
+from app.inspection.artifact import build_artifact
+from app.inspection.recorder import AgentProxy, Recorder, RecordingLLMClient
 from app.main import create_app
 from app.services import retrieval_service as rs
+from app.services import skill_gap_service
 from app.services import user_service as us
+from app.services.pii_redaction_service import redact_pii
 from app.workflows.career_workflow import CareerWorkflow
 
 
@@ -337,9 +345,21 @@ class RecordingVerificationAgent(VerificationAgent):
 
 
 class RecordingWorkflow(CareerWorkflow):
-    def __init__(self, *, trace, **kwargs):
+    def __init__(self, *, trace, recorder=None, **kwargs):
         self.trace = trace
+        self.recorder = recorder or Recorder()
         super().__init__(**kwargs)
+
+    def run(self, user_id, target_career_id=None, raw_profile_text=None):
+        state = super().run(
+            user_id=user_id,
+            target_career_id=target_career_id,
+            raw_profile_text=raw_profile_text,
+            observer=self.recorder.observer,
+        )
+        self.final_state = state
+        self.trace["workflow_node_events"] = self.recorder.node_events
+        return state
 
     def _verification_decision(self, state):
         update = super()._verification_decision(state)
@@ -370,6 +390,14 @@ class CaptureLogs(logging.Handler):
         self.buffer.write(self.format(record) + "\n")
 
 
+def _write_artifact(artifact, output_dir: Path) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    run_id = artifact["run_metadata"]["run_id"]
+    output_file = output_dir / f"{run_id}.json"
+    output_file.write_text(json.dumps(artifact, indent=2, ensure_ascii=False), encoding="utf-8")
+    return output_file
+
+
 def run():
     os.environ["CAREER_API_ACKNOWLEDGE_NO_AUTH"] = "true"
     os.environ["CAREER_API_ALLOW_REMOTE_CLIENTS"] = "true"
@@ -396,48 +424,67 @@ def run():
     career, required = selected
     skill_one, skill_two = required[:2]
     trace = {"executions": [], "routing": []}
+    recorder = Recorder()
+    run_id = uuid.uuid4().hex
+    started_at = datetime.now(timezone.utc).isoformat()
     llm = RecordingFakeLLM(
         skill_one.skill.canonical_name, skill_two.skill.canonical_name,
         skill_one.skill.skill_id, skill_two.skill.skill_id,
     )
+    recorded_llm = RecordingLLMClient(llm, recorder)
     workflow = RecordingWorkflow(
         trace=trace,
-        llm_client=llm,
+        recorder=recorder,
+        llm_client=recorded_llm,
         max_revisions=2,
-        profile_agent=RecordingProfileAgent(llm, trace),
-        career_recommendation_agent=RecordingCareerAgent(llm, trace),
-        skill_gap_agent=RecordingSkillGapAgent(llm, trace),
-        learning_roadmap_agent=RecordingRoadmapAgent(llm, trace),
-        verification_agent=RecordingVerificationAgent(llm, trace),
+        profile_agent=AgentProxy(recorder, "profile", RecordingProfileAgent(recorded_llm, trace)),
+        career_recommendation_agent=AgentProxy(
+            recorder, "career_recommendation", RecordingCareerAgent(recorded_llm, trace)),
+        skill_gap_agent=AgentProxy(recorder, "skill_gap", RecordingSkillGapAgent(recorded_llm, trace)),
+        learning_roadmap_agent=AgentProxy(recorder, "roadmap", RecordingRoadmapAgent(recorded_llm, trace)),
+        verification_agent=AgentProxy(recorder, "verification", RecordingVerificationAgent(recorded_llm, trace)),
     )
     app = create_app()
     app.dependency_overrides[get_workflow] = lambda: workflow
     synthetic_user_id = None
+    post_run_profile = None
+    kb_counts_after = None
     captured = CaptureLogs()
     logger = logging.getLogger()
     logger.addHandler(captured)
     logger.setLevel(logging.DEBUG)
 
     try:
-        with TestClient(app) as client:
-            created = client.post("/analysis/users", json={
-                "email": f"manual-validation-{uuid.uuid4().hex}@example.invalid",
-                "full_name": "Synthetic Manual Validation User",
-            })
-            if created.status_code != 201:
-                raise RuntimeError(f"Synthetic user creation failed ({created.status_code}).")
-            synthetic_user_id = created.json()["user_id"]
-            response = client.post(
-                "/analysis/cv",
-                data={
-                    "user_id": str(synthetic_user_id),
-                    "target_career_id": career.career_id,
-                },
-                files={"file": ("synthetic.txt", CV_TEXT.encode("utf-8"), "text/plain")},
-            )
-            if response.status_code != 200:
-                raise RuntimeError(f"Synthetic CV workflow failed ({response.status_code}).")
-            api_output = response.json()
+        with recorder.instrument(
+            rs=rs, us=us,
+            fit_modules=(career_agent_module, skill_gap_service, verification_agent_module),
+        ):
+            with TestClient(app) as client:
+                created = client.post("/analysis/users", json={
+                    "email": f"manual-validation-{uuid.uuid4().hex}@example.invalid",
+                    "full_name": "Synthetic Manual Validation User",
+                })
+                if created.status_code != 201:
+                    raise RuntimeError(f"Synthetic user creation failed ({created.status_code}).")
+                synthetic_user_id = created.json()["user_id"]
+                response = client.post(
+                    "/analysis/cv",
+                    data={
+                        "user_id": str(synthetic_user_id),
+                        "target_career_id": career.career_id,
+                    },
+                    files={"file": ("synthetic.txt", CV_TEXT.encode("utf-8"), "text/plain")},
+                )
+                if response.status_code != 200:
+                    raise RuntimeError(f"Synthetic CV workflow failed ({response.status_code}).")
+                api_output = response.json()
+                post_run_profile = us.get_user_full_profile(synthetic_user_id)
+                with engine.connect() as connection:
+                    kb_counts_after = {
+                        "careers": connection.execute(
+                            text("SELECT count(*) FROM careers")
+                        ).scalar_one()
+                    }
     finally:
         logger.removeHandler(captured)
         if synthetic_user_id is not None:
@@ -617,17 +664,50 @@ def run():
         failed = [key for key, value in checks.items() if not value]
         raise RuntimeError(f"Manual validation checks failed: {', '.join(failed)}")
 
+    try:
+        google_genai_version = metadata.version("google-genai")
+    except metadata.PackageNotFoundError:
+        google_genai_version = "unavailable (google-genai package metadata not installed)"
+    revision = subprocess.run(
+        ["git", "-C", str(BACKEND_ROOT.parent), "rev-parse", "--verify", "HEAD"],
+        capture_output=True, text=True, check=False,
+    )
+    git_commit = revision.stdout.strip() if revision.returncode == 0 else "unavailable"
+    redacted_cv = redact_pii(CV_TEXT).redacted_text
+    artifact = build_artifact(recorder, {
+        "run_id": run_id,
+        "started_at": started_at,
+        "mode": "fake_llm_database_backed",
+        "mode_label": "Synthetic local manual validation with FakeLLM",
+        "input_source": "synthetic_text",
+        "user": synthetic_user_id,
+        "target_requested": career.career_id,
+        "final_state": workflow.final_state,
+        "max_revisions": workflow.max_revisions,
+        "input_document": {
+            "format": "txt",
+            "size_bytes": len(CV_TEXT.encode("utf-8")),
+            "sha256": hashlib.sha256(redacted_cv.encode("utf-8")).hexdigest(),
+        },
+        "llm": {"client_type": type(llm).__name__, "test_double": True},
+        "llm_client": recorded_llm,
+        "scoring_weights": workflow.career_recommendation_agent._target.weights,
+        "versions": {"python": sys.version.split()[0], "google_genai_sdk": google_genai_version},
+        "kb_counts_before": {"careers": career_count},
+        "kb_counts_after": kb_counts_after,
+        "git_commit": git_commit,
+        "post_run_profile": post_run_profile,
+    })
+
     output_dir = Path(__file__).resolve().parents[1] / "artifacts" / "manual_validation"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_file = output_dir / f"{trace['run']['run_id']}.json"
-    encoded = json.dumps(trace, indent=2, ensure_ascii=False)
+    encoded = json.dumps(artifact, ensure_ascii=False)
     if any(marker in encoded for marker in raw_markers):
         raise RuntimeError("Synthetic PII was found in the diagnostic artifact.")
-    output_file.write_text(encoded, encoding="utf-8")
+    output_file = _write_artifact(artifact, output_dir)
     print(json.dumps({
         "artifact": str(output_file),
         "status": "PASS",
-        "checks": len(checks),
+        "checks": artifact["cross_stage_checks"]["summary"],
         "llm_call_count": len(llm.calls),
         "synthetic_user_cleaned": True,
     }, indent=2))

@@ -206,6 +206,53 @@ Use an allowlist of safe fields and redact sensitive information. Do not save AP
 
 The inspection mode must not change normal application behavior or silently change the LLM configuration. Clearly label diagnostic runs that use fake/fallback LLM behavior versus full runs using the configured production LLM.
 
+### Run metadata template
+
+Copy this metadata into each manual-validation record. Record values actually
+observed for that run; use `unavailable` when the application or artifact does
+not expose them. Do not record secrets, full prompts, CV text, or exception
+messages.
+
+```text
+timestamp_utc:
+run_id:
+git_commit_or_revision:
+llm_provider:
+llm_model_resolved:
+google_genai_sdk_version:
+generation_settings:
+  response_format: application/json
+  max_output_tokens_by_agent:
+    profile_extraction: 8192
+    career_reasoning: 300
+    skill_gap_narrative: 1500
+    roadmap_summary: 500
+    verification_semantic_review: 1200
+  temperature_top_p_top_k_seed:
+    value: unavailable unless explicitly configured/recorded
+    note: SDK defaults apply when the client does not pin these parameters
+prompt_identifiers_or_hashes_by_agent:
+  value: unavailable unless captured by the inspection recorder
+retry_behavior:
+  provider_retry: none in GeminiClient
+  workflow_revision_cap:
+effective_workflow_revision_count:
+knowledge_base_version: unavailable unless independently identified
+outcome:
+error_stage:
+safe_diagnostic_metadata:
+  stage:
+  exception_module_and_class:
+  numeric_provider_code_or_status:
+  sanitized_frame_locations:
+```
+
+The current Gemini client pins JSON response format and per-call token limits,
+but not temperature, top-p, top-k, or seed; treat those as SDK defaults, not as
+recorded numeric values. The inspection recorder can capture prompt labels and
+system-prompt hashes; ordinary workflow diagnostic logs do not capture prompt
+hashes, model name, or SDK version.
+
 ## 8. Phase F — Check correctness, not just successful execution
 
 Create a manual-validation report comparing the actual results with an independent reference derived from the CV and knowledge base.

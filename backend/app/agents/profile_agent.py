@@ -18,6 +18,11 @@ llm_client.py), never on a specific provider class or name.
 import json
 from dataclasses import dataclass, field
 
+import logging
+from sqlalchemy.exc import SQLAlchemyError
+
+logger = logging.getLogger(__name__)
+
 from app.agents.llm_client import LLMClient
 from app.agents.skill_normalizer import normalize_skill, NormalizationResult, _norm
 from app.services import retrieval_service as rs
@@ -95,8 +100,14 @@ class ProfileAgent:
         # (direct repository calls kept in user_service to stay consistent
         # with the existing Step 6 pattern; Profile Agent only orchestrates)
         for edu in extracted.get("education", []):
-            us.add_education(user_id, **_only(edu, ["institution", "degree", "field_of_study",
-                                                      "start_date", "end_date", "description"]))
+            try:
+                us.add_education(user_id, **_only(edu, [ "institution", "degree", "field_of_study",
+                        "start_date", "end_date", "description" ])
+                )
+            except SQLAlchemyError as exc:
+                logger.error( "Education database error: %s", str(getattr(exc, "orig", exc)))
+                raise
+
         for exp in extracted.get("experience", []):
             us.add_experience(user_id, **_only(exp, ["company", "role_title", "employment_type",
                                                        "start_date", "end_date", "description"]))

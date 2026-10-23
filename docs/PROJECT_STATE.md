@@ -109,7 +109,9 @@ over HTTP.
 
 ## Pending Work
 
-1. Review logging, reproducibility, and evaluation support.
+1. Finish Step 16 by running the shared manual-validation artifact path against
+   an explicitly safe local test database and checking the resulting artifact;
+   current status is partial (see Step 16 record below).
 2. Implement and evaluate baseline and ablation configurations.
 3. Review live LLM-backed analysis only when explicitly approved; current
    database-backed analysis regression tests use fake LLM clients.
@@ -406,6 +408,67 @@ over HTTP.
   stored proficiency or canonical mapping. Canonicalization differences in
   `claimed_skill` text can still produce distinct claims because the existing
   unique key is intentionally unchanged.
+
+## Step 16 Inspection and Career-Fit Verification Record
+
+* Connected the synthetic manual-validation runner to the existing
+  `Recorder`, actual agent proxies, LangGraph node-update observer, and
+  `build_artifact()` path. It now persists one inspection schema rather than
+  the runner's prior competing trace schema. The runner itself was not
+  executed because it creates a database user and persists profile data.
+* Artifacts record actual runtime client/model identity, installed SDK package
+  version, per-call prompt identifiers and hashes, per-call token limits,
+  Git revision, effective workflow revision cap/count, node and agent
+  execution order, verification checks, revision targets and safe changed
+  output fields, scoring weights, and final status. KB version is explicitly
+  unavailable because no KB version is exposed. FakeLLM runs are labeled as
+  test doubles; Gemini temperature and other unpinned settings are identified
+  as SDK defaults with effective values unavailable.
+* Trace privacy was tightened: exception messages, prompt/response text,
+  extracted profile strings, user claims, narratives, and verifier free text
+  are not serialized. Text-derived values use hashes/lengths; DB writes record
+  field names/types only; workflow errors retain only safe stage/type and
+  numeric or allowlisted status metadata. Agent start/duration is recorded;
+  graph-only node start times are unavailable because LangGraph's observer
+  exposes completed updates.
+* Added an independent two-candidate career-fit numerical test. The current
+  formula uses per-requirement weight `base_class_weight × KB_confidence`
+  and contribution based on linked/claim-only/missing status, with a capped
+  modifier for any reported proficiency; the score is clamped weighted
+  contribution divided by total requirement weight, or zero for an empty
+  denominator. Recommendations and Step 9 expose the score rounded to four
+  decimals. Step 9 keeps no priority/rank/severity logic; its fit score still
+  uses the shared Step 8 calculator. In the synthetic fixture, independent
+  scores are `CAREER_A=1.7/2.625=0.647619...` (reported `0.6476`) and
+  `CAREER_B=1.2/1.7=0.705882...` (reported `0.7059`); observed differences
+  are bounded by `0.00005`, the four-decimal rounding tolerance.
+* Changed files for this task: `backend/app/inspection/recorder.py`,
+  `backend/app/inspection/artifact.py`, `backend/scripts/manual_validation.py`,
+  `backend/tests/test_inspection_core.py`,
+  `backend/tests/test_manual_validation_workflow.py`,
+  `backend/tests/test_career_fit_independent_verification.py` (new), and this
+  state record. Existing unrelated modifications and untracked files were
+  preserved.
+* Tests/checks run from `backend`:
+  * Focused inspection/workflow/scoring tests — **51 passed, 1 warning**.
+  * Broader offline backend regressions — **187 passed, 10 deselected, 1
+    warning**. DB-mutating idempotency cases were deselected; no database or
+    live LLM calls were made.
+  * `python -m tests.test_career_fit_service_unit`,
+    `python -m tests.test_skill_gap_service_unit`, and
+    `python -m tests.test_skill_gap_agent_unit` — passed.
+  * `python -m py_compile` on the changed Python implementation/test files —
+    passed; `git diff --check` — passed.
+* Environment evidence: Google Gen AI SDK version **2.31.0** is installed.
+  `upload/cv2.pdf` exists and is readable, but its contents were not accessed
+  or used. No manual-validation artifact was generated in this task; builder
+  metadata/privacy were exercised by isolated synthetic tests. No real Gemini
+  run, live DB workflow, or populated production-model artifact has been
+  verified. SDK-internal retry behavior and the KB version remain unavailable.
+* Decision: Step 16 is **partially complete**, not complete. The artifact
+  generation and offline trace/scoring paths are tested, but a generated
+  artifact from a safe local test database and its runtime provenance still
+  need verification.
 
 Do not mark pending work complete without inspecting the code and running the relevant tests.
 

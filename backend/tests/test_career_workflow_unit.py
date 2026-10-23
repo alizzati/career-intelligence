@@ -1,8 +1,10 @@
 """Step 13 LangGraph orchestration tests; all agent dependencies are fakes."""
+import logging
 from types import SimpleNamespace
 from unittest import mock
 
 import pytest
+from google.genai.errors import ServerError
 
 from app.schemas.verification import VerificationCheck, VerificationResult
 from app.workflows.career_workflow import CareerWorkflow
@@ -356,6 +358,83 @@ def test_agent_exceptions_are_structured_workflow_errors(agent_key, expected_sta
     assert result["final_status"] == "ERROR"
     assert result["errors"][0]["stage"] == expected_stage
     assert result["final_status"] != "VERIFIED"
+
+
+def test_local_diagnostics_log_safe_exception_metadata_only(monkeypatch, caplog):
+    class SyntheticProviderFailure(Exception):
+        code = 503
+
+    monkeypatch.setenv("CAREER_API_DIAGNOSTIC_LOGGING", "true")
+    monkeypatch.setenv("CAREER_API_ALLOW_REMOTE_CLIENTS", "false")
+    caplog.set_level(logging.ERROR, logger="app.workflows.career_workflow")
+    workflow, _ = make_workflow(
+        profile_agent=FakeProfileAgent(
+            error=SyntheticProviderFailure(
+                "private exception text; synthetic.person@example.test"
+            )
+        )
+    )
+
+    result = workflow.run(
+        user_id=17,
+        raw_profile_text="Synthetic Candidate synthetic.person@example.test",
+    )
+
+    assert result["final_status"] == "ERROR"
+    assert result["errors"][0]["stage"] == "profile_analysis"
+    assert result["errors"][0]["message"] == (
+        "Profile analysis failed; submitted profile details were omitted."
+    )
+    assert "stage=profile_analysis" in caplog.text
+    assert "SyntheticProviderFailure" in caplog.text
+    assert "provider_code=503" in caplog.text
+    assert "provider_status=unavailable" in caplog.text
+    assert "_profile_analysis" in caplog.text
+    assert "synthetic.person@example.test" not in caplog.text
+    assert "private exception text" not in caplog.text
+    assert "Synthetic Candidate" not in caplog.text
+    assert "Traceback" not in caplog.text
+
+
+def test_local_diagnostics_log_real_google_server_error_metadata(monkeypatch, caplog):
+    error = ServerError(
+        503,
+        {"error": {"message": "synthetic provider details", "status": "UNAVAILABLE"}},
+    )
+    monkeypatch.setenv("CAREER_API_DIAGNOSTIC_LOGGING", "true")
+    monkeypatch.setenv("CAREER_API_ALLOW_REMOTE_CLIENTS", "false")
+    caplog.set_level(logging.ERROR, logger="app.workflows.career_workflow")
+    workflow, _ = make_workflow(profile_agent=FakeProfileAgent(error=error))
+
+    result = workflow.run(user_id=17, raw_profile_text="synthetic profile")
+
+    assert result["final_status"] == "ERROR"
+    assert result["errors"][0]["stage"] == "profile_analysis"
+    assert "exception=google.genai.errors.ServerError" in caplog.text
+    assert "provider_code=503" in caplog.text
+    assert "provider_status=unavailable" in caplog.text
+    assert "frames=" in caplog.text and "_profile_analysis" in caplog.text
+    assert "synthetic provider details" not in caplog.text
+    assert "UNAVAILABLE" not in caplog.text
+
+
+def test_local_diagnostics_are_disabled_when_remote_clients_are_allowed(
+    monkeypatch, caplog,
+):
+    class SyntheticProviderFailure(Exception):
+        code = 503
+
+    monkeypatch.setenv("CAREER_API_DIAGNOSTIC_LOGGING", "true")
+    monkeypatch.setenv("CAREER_API_ALLOW_REMOTE_CLIENTS", "true")
+    caplog.set_level(logging.ERROR, logger="app.workflows.career_workflow")
+    workflow, _ = make_workflow(
+        profile_agent=FakeProfileAgent(error=SyntheticProviderFailure())
+    )
+
+    result = workflow.run(user_id=17, raw_profile_text="synthetic profile")
+
+    assert result["final_status"] == "ERROR"
+    assert caplog.text == ""
 
 
 def test_raw_profile_without_profile_client_is_controlled_error():

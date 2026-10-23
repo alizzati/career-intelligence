@@ -2,6 +2,7 @@
 import copy
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 
 import pytest
 from sqlalchemy import text
@@ -11,6 +12,7 @@ from app.core.db import DatabaseConfigurationError, engine, get_engine
 from app.repositories import user_repository as repo
 from app.services import retrieval_service as rs
 from app.services import user_service as us
+from app.services.date_normalization import normalize_date_value
 
 
 def extraction(institution="Universitas Contoh", company="StartupX", project="Campus Course Scheduler"):
@@ -71,6 +73,46 @@ def user_id():
 
 
 ONE_OF_EACH = {"education": 1, "experience": 1, "projects": 1, "certifications": 1, "skills": 1, "evidence": 1}
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("Aug 2023", date(2023, 8, 1)),
+        ("August 2023", date(2023, 8, 1)),
+        ("2023-08", date(2023, 8, 1)),
+        ("2023", date(2023, 1, 1)),
+        ("2023-08-15", date(2023, 8, 15)),
+        (None, None),
+        ("   ", None),
+        ("Present", None),
+        ("Current", None),
+        ("invalid-date", None),
+    ],
+)
+def test_date_values_normalize_to_sql_compatible_dates(value, expected):
+    is_end_date = value in {"Present", "Current"}
+    assert normalize_date_value(value, field_name="end_date", is_end_date=is_end_date) == expected
+
+
+def test_profile_agent_persists_month_year_dates_without_database_error(user_id):
+    payload = extraction()
+    payload["education"][0]["start_date"] = "Aug 2023"
+    payload["education"][0]["end_date"] = "Present"
+    payload["experience"][0]["start_date"] = "2023-08"
+    payload["experience"][0]["end_date"] = "Current"
+    payload["certifications"][0]["issue_date"] = "August 2023"
+    payload["certifications"][0]["expiry_date"] = "2024"
+
+    submit(user_id, payload)
+
+    profile = us.get_user_full_profile(user_id)
+    assert profile.education[0].start_date == date(2023, 8, 1)
+    assert profile.education[0].end_date is None
+    assert profile.experience[0].start_date == date(2023, 8, 1)
+    assert profile.experience[0].end_date is None
+    assert profile.certifications[0].issue_date == date(2023, 8, 1)
+    assert profile.certifications[0].expiry_date == date(2024, 1, 1)
 
 
 def test_same_cv_submitted_three_times_creates_one_set_of_rows(user_id):

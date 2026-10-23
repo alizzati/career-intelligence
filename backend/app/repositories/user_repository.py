@@ -8,6 +8,8 @@ advisory locks to safely handle concurrent requests.
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
+from app.services.date_normalization import normalize_date_value
+
 # ---- Idempotent write helpers & Constants ------------------------------------------
 _NS_EDUCATION, _NS_EXPERIENCE, _NS_PROJECT, _NS_CERTIFICATION, _NS_EVIDENCE = 14101, 14102, 14103, 14104, 14105
 
@@ -84,6 +86,8 @@ _EDU_MATCH = (f"user_id = :uid AND {_same('institution', 'inst')} "
 def create_education(conn: Connection, user_id: int, institution: str, degree: str | None,
                      field_of_study: str | None, start_date, end_date, description: str | None) -> dict:
     _advisory_lock(conn, _NS_EDUCATION, user_id)
+    normalized_start = normalize_date_value(start_date, field_name="start_date")
+    normalized_end = normalize_date_value(end_date, field_name="end_date", is_end_date=True)
     return _insert_or_fetch(
         conn,
         f"""INSERT INTO user_education (user_id, institution, degree, field_of_study, start_date, end_date, description)
@@ -92,7 +96,7 @@ def create_education(conn: Connection, user_id: int, institution: str, degree: s
             RETURNING {_EDU_COLS}""",
         f"SELECT {_EDU_COLS} FROM user_education WHERE {_EDU_MATCH} ORDER BY education_id LIMIT 1",
         {"uid": user_id, "inst": institution, "deg": degree, "field": field_of_study,
-         "sd": start_date, "ed": end_date, "desc": description},
+         "sd": normalized_start, "ed": normalized_end, "desc": description},
         ("uid", "inst", "deg", "field"),
     )
 
@@ -113,6 +117,8 @@ _EXP_MATCH = f"user_id = :uid AND {_same('company', 'co')} AND {_same('role_titl
 def create_experience(conn: Connection, user_id: int, company: str, role_title: str,
                       employment_type: str | None, start_date, end_date, description: str | None) -> dict:
     _advisory_lock(conn, _NS_EXPERIENCE, user_id)
+    normalized_start = normalize_date_value(start_date, field_name="start_date")
+    normalized_end = normalize_date_value(end_date, field_name="end_date", is_end_date=True)
     return _insert_or_fetch(
         conn,
         f"""INSERT INTO user_experience (user_id, company, role_title, employment_type, start_date, end_date, description)
@@ -121,7 +127,7 @@ def create_experience(conn: Connection, user_id: int, company: str, role_title: 
             RETURNING {_EXP_COLS}""",
         f"SELECT {_EXP_COLS} FROM user_experience WHERE {_EXP_MATCH} ORDER BY experience_id LIMIT 1",
         {"uid": user_id, "co": company, "role": role_title, "etype": employment_type,
-         "sd": start_date, "ed": end_date, "desc": description},
+         "sd": normalized_start, "ed": normalized_end, "desc": description},
         ("uid", "co", "role"),
     )
 
@@ -170,6 +176,8 @@ _CERT_MATCH = f"user_id = :uid AND {_same('name', 'name')} AND {_same('issuer', 
 def create_certification(conn: Connection, user_id: int, name: str, issuer: str | None,
                          issue_date, expiry_date, credential_url: str | None) -> dict:
     _advisory_lock(conn, _NS_CERTIFICATION, user_id)
+    normalized_issue_date = normalize_date_value(issue_date, field_name="issue_date")
+    normalized_expiry_date = normalize_date_value(expiry_date, field_name="expiry_date", is_end_date=True)
     return _insert_or_fetch(
         conn,
         f"""INSERT INTO user_certifications (user_id, name, issuer, issue_date, expiry_date, credential_url)
@@ -177,8 +185,8 @@ def create_certification(conn: Connection, user_id: int, name: str, issuer: str 
             WHERE NOT EXISTS (SELECT 1 FROM user_certifications WHERE {_CERT_MATCH})
             RETURNING {_CERT_COLS}""",
         f"SELECT {_CERT_COLS} FROM user_certifications WHERE {_CERT_MATCH} ORDER BY certification_id LIMIT 1",
-        {"uid": user_id, "name": name, "issuer": issuer, "idate": issue_date,
-         "edate": expiry_date, "url": credential_url},
+        {"uid": user_id, "name": name, "issuer": issuer, "idate": normalized_issue_date,
+         "edate": normalized_expiry_date, "url": credential_url},
         ("uid", "name", "issuer"),
     )
 
