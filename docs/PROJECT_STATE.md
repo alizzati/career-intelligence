@@ -21,6 +21,11 @@ Hybrid Verified Multi-Agent Career Intelligence System for IT Graduates.
 * Step 14: FastAPI integration and Step 14.1 security/configuration hardening.
 * Step 14.2: Runtime integration tests against the local database and FastAPI app.
 * Step 14.3: Existing-profile privacy hardening for persisted user text.
+* Step 14.4: Insert-only user skill ingestion.
+* Step 15: React/Vite frontend over the existing API.
+
+Step 16 is only partially complete and is therefore not listed as a completed
+step; see its record below.
 
 Steps 5–11 regression tests were run locally during Step 12 implementation and passed.
 Step 12 deterministic checks and mocked semantic-review tests passed; a local-KB
@@ -29,11 +34,27 @@ Step 13's focused tests and local workflow integration run passed.
 
 ## Current Checkpoint
 
-Steps 14.2 and 14.3 are complete. The database-backed runtime tests use the
-local `career_intelligence` database through FastAPI's TestClient and fake
-LLMs; they do not establish live Gemini integration. Local Uvicorn liveness,
-Vite proxy health, and synthetic API user creation were separately checked
-over HTTP.
+As of 2026-10-26, Step 15 is complete and Step 16 is partially complete. The
+last committed checkpoint is `e9f09ee` ("step 16 partially completed"); the X2
+profile-view fix, the artifact contract, and the isolated-database guards are
+working-tree changes that have not been committed. Step 17 has not started.
+
+Verified during this reconciliation:
+
+* Frontend: `npm run typecheck` passed; `npm test` passed with **2 files, 10
+  tests** (see the Step 15 record).
+* Step 16 focused offline suites: **117 passed, 1 warning** (see the Step 16
+  record).
+* `python -m py_compile` on the changed inspection/runner/test files passed;
+  `git diff --check` passed (one pre-existing LF/CRLF notice for
+  `backend/scripts/import_kb.py`).
+* No manual-validation artifact produced after the X2 fix exists. The latest
+  artifact (`facb708...`, 2026-10-25) predates the fix and recorded 10 PASS / 1
+  FAIL (X2) from the pre-hardening runner. See the Step 16 record.
+
+The database-backed runtime tests and live LLM behavior were not run during
+this reconciliation. Earlier results for those remain prior evidence, not
+freshly verified facts.
 
 ## Local Full-Stack Runtime Check (2026-10-18)
 
@@ -54,7 +75,8 @@ over HTTP.
     opt-in local PostgreSQL/Knowledge Base runtime tests using synthetic users
     and fake LLM clients.
   * From `frontend`: `npm run typecheck` — passed; `npm test` — **1 file,
-    7 tests passed**; `npm run build` — passed.
+    7 tests passed**; `npm run build` — passed. (Historical 2026-10-18 result.
+    The current frontend suite is 2 files / 10 tests; see the Step 15 record.)
 * Live HTTP checks: Uvicorn started on `127.0.0.1:8000`; `GET /health`
   returned HTTP 200 with `{"status":"ok"}`. `GET /openapi.json` showed
   `/health` GET and `/analysis/users`, `/analysis/profile`, `/analysis/cv`
@@ -109,11 +131,17 @@ over HTTP.
 
 ## Pending Work
 
-1. Finish Step 16 by running the shared manual-validation artifact path against
-   an explicitly safe local test database and checking the resulting artifact;
-   current status is partial (see Step 16 record below).
-2. Implement and evaluate baseline and ablation configurations.
-3. Review live LLM-backed analysis only when explicitly approved; current
+1. Finish Step 16 (currently partial). After explicit approval, run the guarded
+   manual-validation runner only against `career_intelligence_e2e_test` (or
+   exercise the same path with an equivalent isolated fixture), regenerate a
+   `manual_validation/0.3` artifact, confirm X2 and all cross-stage/independent
+   checks pass, validate the artifact with
+   `app.inspection.contract.validate_artifact`, and commit the X2/contract/guard
+   changes. Do not use the main `career_intelligence` database.
+2. Implement the Step 17 evaluation framework (not started).
+3. Implement and evaluate Step 18 baseline and ablation configurations.
+4. Step 19 full test matrix and Step 20 end-to-end experiments remain pending.
+5. Review live LLM-backed analysis only when explicitly approved; current
    database-backed analysis regression tests use fake LLM clients.
 
 ## Step 12 Verification Record
@@ -409,21 +437,62 @@ over HTTP.
   `claimed_skill` text can still produce distinct claims because the existing
   unique key is intentionally unchanged.
 
+## Step 15 Frontend Record
+
+* Implemented a React 18 / Vite / TypeScript frontend under `frontend/` on top
+  of the existing FastAPI API. Files: `src/App.tsx`, `src/pages.tsx`,
+  `src/components.tsx`, `src/services/api.ts`, `src/types/api.ts`,
+  `src/main.tsx`, `src/styles.css`, plus `src/services/api.test.ts` and
+  `src/components.test.tsx`.
+* Eight views: Home, User Profile, Skills & Evidence, Career Recommendations,
+  Skill Gap, Learning Roadmap, Evidence / Sources, and Analysis Details. Home
+  supports a backend health check, user creation/selection, stored-profile
+  analysis, an optional canonical target career ID, and CV upload
+  (PDF/DOCX/TXT). Analysis results are held in browser memory only; no
+  frontend persistence was added.
+* The API client uses the `/api` prefix; the Vite dev proxy rewrites it to
+  `http://127.0.0.1:8000`, preserving the backend loopback boundary. Network
+  failures and HTTP error bodies are exposed as distinct `ApiRequestError`
+  kinds; quota and invalid-model errors are mapped to readable messages while
+  raw stage identifiers are not shown to the user.
+* The UI renders fields returned by the API. It explicitly marks unavailable
+  data (stored profile details, evidence descriptions/URLs, provenance
+  records, analysis ID/history/timestamps/model version) instead of inventing
+  values. It displays deterministic recommendations, all four skill-gap
+  categories, roadmap items, verification checks, and scoring weights.
+* Tests run from `frontend` on 2026-10-26:
+  * `npm run typecheck` — passed.
+  * `npm test` — **2 files, 10 tests passed** (`api.test.ts` 8,
+    `components.test.tsx` 2).
+* Current coverage is API-contract and component-rendering only. No browser or
+  end-to-end test ran against a live backend, no live LLM was used, and
+  `npm run build` was not re-run during this reconciliation. The historical
+  2026-10-18 record (1 file, 7 tests, build passed) predates the current
+  2-file suite.
+* Commits: `32f82da` (initial frontend) and `3d563c6` (Step 15 implementation).
+
 ## Step 16 Inspection and Career-Fit Verification Record
 
-* Connected the synthetic manual-validation runner to the existing
-  `Recorder`, actual agent proxies, LangGraph node-update observer, and
-  `build_artifact()` path. It now persists one inspection schema rather than
-  the runner's prior competing trace schema. The runner itself was not
-  executed because it creates a database user and persists profile data.
+Status: **PARTIAL** (not complete). The inspection path and independent scoring
+checks are implemented and tested offline, but no artifact produced after the
+X2 fix from the guarded isolated database exists, and the relevant
+working-tree changes are not committed.
+
+### One artifact path and runtime metadata
+
+* Connected the synthetic manual-validation runner to the existing `Recorder`,
+  actual agent proxies, LangGraph node-update observer, and `build_artifact()`
+  path. It now persists one inspection schema rather than the runner's prior
+  competing trace schema. The original Step 16 implementation did not execute
+  the runner; a later manual run produced the artifact described below.
 * Artifacts record actual runtime client/model identity, installed SDK package
-  version, per-call prompt identifiers and hashes, per-call token limits,
-  Git revision, effective workflow revision cap/count, node and agent
-  execution order, verification checks, revision targets and safe changed
-  output fields, scoring weights, and final status. KB version is explicitly
-  unavailable because no KB version is exposed. FakeLLM runs are labeled as
-  test doubles; Gemini temperature and other unpinned settings are identified
-  as SDK defaults with effective values unavailable.
+  version, per-call prompt identifiers and hashes, per-call token limits, Git
+  revision, effective workflow revision cap/count, node and agent execution
+  order, verification checks, revision targets and safe changed output fields,
+  scoring weights, and final status. KB version is explicitly unavailable
+  because no KB version is exposed. FakeLLM runs are labeled as test doubles;
+  Gemini temperature and other unpinned settings are identified as SDK defaults
+  with effective values unavailable.
 * Trace privacy was tightened: exception messages, prompt/response text,
   extracted profile strings, user claims, narratives, and verifier free text
   are not serialized. Text-derived values use hashes/lengths; DB writes record
@@ -432,43 +501,160 @@ over HTTP.
   graph-only node start times are unavailable because LangGraph's observer
   exposes completed updates.
 * Added an independent two-candidate career-fit numerical test. The current
-  formula uses per-requirement weight `base_class_weight × KB_confidence`
-  and contribution based on linked/claim-only/missing status, with a capped
+  formula uses per-requirement weight `base_class_weight × KB_confidence` and
+  contribution based on linked/claim-only/missing status, with a capped
   modifier for any reported proficiency; the score is clamped weighted
   contribution divided by total requirement weight, or zero for an empty
   denominator. Recommendations and Step 9 expose the score rounded to four
   decimals. Step 9 keeps no priority/rank/severity logic; its fit score still
   uses the shared Step 8 calculator. In the synthetic fixture, independent
   scores are `CAREER_A=1.7/2.625=0.647619...` (reported `0.6476`) and
-  `CAREER_B=1.2/1.7=0.705882...` (reported `0.7059`); observed differences
-  are bounded by `0.00005`, the four-decimal rounding tolerance.
-* Changed files for this task: `backend/app/inspection/recorder.py`,
+  `CAREER_B=1.2/1.7=0.705882...` (reported `0.7059`); observed differences are
+  bounded by `0.00005`, the four-decimal rounding tolerance. Additional edge
+  tests cover linked/claimed-only proficiency, non-informative proficiency,
+  case-insensitive CORE labels, duplicate requirements, unknown evidence
+  status, and non-default weights.
+* Committed inspection/Step 16-related files (some landed in `3d563c6`, others
+  in `e9f09ee`): `backend/app/inspection/recorder.py`,
   `backend/app/inspection/artifact.py`, `backend/scripts/manual_validation.py`,
   `backend/tests/test_inspection_core.py`,
+  `backend/tests/test_inspection_serialization.py`,
+  `backend/tests/test_inspection_integration.py`,
   `backend/tests/test_manual_validation_workflow.py`,
-  `backend/tests/test_career_fit_independent_verification.py` (new), and this
-  state record. Existing unrelated modifications and untracked files were
-  preserved.
-* Tests/checks run from `backend`:
-  * Focused inspection/workflow/scoring tests — **51 passed, 1 warning**.
-  * Broader offline backend regressions — **187 passed, 10 deselected, 1
-    warning**. DB-mutating idempotency cases were deselected; no database or
-    live LLM calls were made.
-  * `python -m tests.test_career_fit_service_unit`,
-    `python -m tests.test_skill_gap_service_unit`, and
-    `python -m tests.test_skill_gap_agent_unit` — passed.
-  * `python -m py_compile` on the changed Python implementation/test files —
-    passed; `git diff --check` — passed.
-* Environment evidence: Google Gen AI SDK version **2.31.0** is installed.
-  `upload/cv2.pdf` exists and is readable, but its contents were not accessed
-  or used. No manual-validation artifact was generated in this task; builder
-  metadata/privacy were exercised by isolated synthetic tests. No real Gemini
-  run, live DB workflow, or populated production-model artifact has been
-  verified. SDK-internal retry behavior and the KB version remain unavailable.
-* Decision: Step 16 is **partially complete**, not complete. The artifact
-  generation and offline trace/scoring paths are tested, but a generated
-  artifact from a safe local test database and its runtime provenance still
-  need verification.
+  `backend/tests/test_career_fit_independent_verification.py`,
+  `backend/tests/test_career_fit_edge_cases.py`, and this state record.
+  Working-tree follow-up files are listed under X2 hardening below.
+
+### X2 profile-view hardening (working tree, uncommitted)
+
+* X2 previously compared every `get_user_full_profile` read. A read taken
+  before the Profile Agent persisted the CV (for example the API's
+  pre-workflow user check) could observe an empty profile and produce a false
+  FAIL.
+* `c_profile_views()` now derives a persistence cutoff from the latest Profile
+  Agent run's own DB writes (or that run's sequence if it wrote nothing),
+  excludes reads at or before the cutoff, and reports them under
+  `compared.ignored_pre_persistence_reads`.
+* X2 now requires at least two distinct workflow agents among the comparable
+  reads. Repeated reads by the same agent do not satisfy the threshold; the
+  post-run DB snapshot is a reference only and never counts as an agent read.
+  Insufficient evidence returns `UNAVAILABLE`, not PASS or FAIL.
+* Changed files in the working tree: `backend/app/inspection/artifact.py`,
+  `backend/tests/test_inspection_profile_views.py` (new), and
+  `backend/tests/test_inspection_integration.py` (real-Recorder precheck
+  regression). The workflow's actual profile reads are in
+  `career_recommendation_agent.py`, `skill_gap_service.py`, and
+  `verification_agent.py`; the API pre-check is recorded under `workflow`.
+* The existing-profile path (no Profile Agent run) keeps all reads comparable,
+  but the `workflow` stage still does not count toward the two-agent threshold.
+
+### Artifact evidence inspected (metadata only)
+
+* Five files exist under `backend/artifacts/manual_validation/`. Four legacy
+  311102-byte artifacts (2026-10-20/22) use the pre-0.3/legacy trace layout,
+  record `database_name: career_intelligence`, and report all 11 cross-stage
+  checks PASS with `VERIFIED`. They predate the coherent
+  `manual_validation/0.3` schema and are not evidence for the current path.
+* `facb7088776846358de47142954f589a.json` (266543 bytes,
+  `schema_version: manual_validation/0.3`, started 2026-10-25T11:03:38Z, Git
+  `e9f09ee`, FakeLLM test double, `google-genai` 2.31.0, 14 calls, 0 failures)
+  is the latest artifact. The workflow final status was `VERIFIED`, but the
+  harness cross-stage summary was **10 PASS / 1 FAIL**: X2 failed with
+  "profile signature differs between reads"; reads were recorded for
+  `workflow` 1, `career_recommendation` 1, `skill_gap` 1, `verification` 1,
+  and `post_run` 1. This is the failure pattern the X2 cutoff fix addresses.
+* The latest artifact predates the X2 fix and the runner safety guard. It does
+  not record the database name; the runner at its recorded commit `e9f09ee`
+  required `current_database() == "career_intelligence"`, so it did not
+  exercise the current `career_intelligence_e2e_test` guard.
+* Running `app.inspection.contract.validate_artifact()` on the latest artifact
+  returns exactly one violation: "a cross-stage check reported FAIL" (X2). It
+  reports no schema, provenance, or privacy-path violation.
+* No artifact has been generated after the X2 fix, and no artifact records use
+  of the guarded isolated database. The artifact was not regenerated during
+  this reconciliation.
+
+### Preflight audit for the isolated run (2026-10-26)
+
+Static audit only: the runner was not executed, no database was contacted, and
+no tests were re-run for this audit.
+
+* The guard and the workflow services share the single cached engine from
+  `app.core.db.get_engine()` (the `_LazyEngine` proxy), and no other
+  `create_engine` call exists. The database checked by
+  `_validate_isolated_db_safety()` is therefore the database the workflow uses.
+* Guard order is fail-closed before mutation: explicit opt-in, `engine.url.host`,
+  `engine.url.database`, then `SELECT current_database()`. The name check runs
+  before the guard opens a connection, and every check runs before the
+  synthetic user is created.
+* `backend/.env` currently names the production database
+  (`CAREER_DB_NAME=career_intelligence`) while the e2e opt-in is already set. A
+  bare invocation therefore stops at the `engine.url.database` check without
+  connecting to or modifying either database. The run must explicitly override
+  `CAREER_DB_NAME` and must not set `CAREER_DB_URL`.
+* The guard does not check the port. Both local databases are reached at
+  `localhost:5433`, so the database-name check, not the port, is the
+  distinguishing safety boundary. The artifact records neither the database
+  name nor the host/port.
+* A run started from the current working tree would record `git_commit` =
+  `e9f09ee` (still HEAD) although the X2 fix, contract, guard, and tests are
+  uncommitted and several helper scripts are untracked. `build_artifact`
+  records no dirty flag, so the revision claim would be misleading.
+* The runner returns a nonzero code when its own cross-stage or independent
+  checks fail, but it never calls
+  `app.inspection.contract.validate_artifact`. Schema, privacy, provenance, and
+  contract validation remain a separate manual step.
+* Cleanup deletes only the `users` row by exact id and reports H9. Cascade
+  deletion of `user_profiles`, `user_*`, `user_skills`, and
+  `user_skill_evidence` cannot be verified from source without connecting; the
+  existing database tests use the same single delete.
+* Isolated-database readiness (schema plus exactly ten careers) cannot be
+  verified offline. The runner checks `career_count == 10` before any mutation,
+  so an unprepared database fails safely instead of producing evidence.
+* Consequence: the current tree is safe to try only after explicitly overriding
+  the database name, but it is **not ready to produce Step 16 evidence** until
+  the revision is committed, the artifact records the effective database
+  identity, and artifact-contract validation is part of the run.
+
+### Tests and checks
+
+* Re-executed offline on 2026-10-26 from `backend`:
+  * `python -m pytest tests\test_inspection_core.py tests\test_inspection_integration.py tests\test_inspection_profile_views.py tests\test_inspection_serialization.py tests\test_artifact_contract.py tests\test_manual_validation_gate.py tests\test_manual_validation_workflow.py tests\test_career_fit_independent_verification.py tests\test_career_fit_edge_cases.py tests\test_career_workflow_unit.py -q -p no:cacheprovider`
+    — **117 passed, 1 warning** (LangChain pending-deprecation).
+  * `python -m py_compile app\inspection\artifact.py app\inspection\contract.py scripts\manual_validation.py tests\test_inspection_profile_views.py tests\test_inspection_integration.py tests\test_artifact_contract.py tests\test_manual_validation_gate.py`
+    — passed.
+  * `git diff --check` — passed (pre-existing LF/CRLF notice for
+    `backend/scripts/import_kb.py`).
+  * `upload/cv2.pdf` exists at the repository root (217740 bytes) but was not
+    read, parsed, or used; the executed tests use synthetic fixtures.
+* Previously recorded but **not re-executed during this reconciliation**:
+  focused inspection/workflow/scoring tests (51 passed), broader offline
+  regressions (187 passed, 10 deselected, 1 warning), and the career-fit,
+  skill-gap, and skill-gap-agent unit scripts. Treat those as prior evidence.
+* The in-memory integration/contract tests exercise real agents, the real
+  workflow, the real recorder/artifact builder, and a scripted LLM, but replace
+  PostgreSQL and the KB with in-memory stand-ins. They do not establish a real
+  database run or live-model behavior.
+
+### Remaining limitations and decision
+
+* The X2 fix, `backend/app/inspection/contract.py`,
+  `backend/tests/test_artifact_contract.py`,
+  `backend/tests/test_inspection_profile_views.py`, the isolated-DB guard, and
+  the KB-import guard are uncommitted working-tree changes. Git still points to
+  `e9f09ee`.
+* The guarded runner's database checks are unit-tested with mocks only; no real
+  isolated-DB run proves the guard, cleanup, KB counts, or artifact contract
+  against `career_intelligence_e2e_test`.
+* No live LLM/provider call was made. FakeLLM establishes path and privacy
+  behavior only; provider/model settings, SDK defaults, retry behavior, and
+  real-model quality remain unverified. KB version is explicitly unavailable.
+* The current workflow final status (`VERIFIED`) is not evidence that X2 or the
+  artifact contract passes after the fix.
+* **Decision: Step 16 remains PARTIAL.** It becomes complete only after a
+  post-fix artifact is generated through the guarded isolated-DB path (or an
+  equivalent isolated fixture), all cross-stage/independent checks pass,
+  `validate_artifact` reports no violations, and the changes are committed.
 
 Do not mark pending work complete without inspecting the code and running the relevant tests.
 
