@@ -126,6 +126,14 @@ def _safe_document(value):
     return data or "unavailable"
 
 
+def _safe_database_identity(value):
+    """Effective database identity only: no user, password, or connection URL."""
+    data = _safe_context_values(value, ("name", "host", "port", "server_current_database"))
+    if isinstance(data.get("port"), bool) or not isinstance(data.get("port"), int):
+        data.pop("port", None)
+    return data
+
+
 def _llm_runtime(client):
     inner = client
     seen = set()
@@ -521,6 +529,23 @@ def _sig(profile):
                   for s in profile.skills)
 
 
+def _profile_persistence_cutoff(rec):
+    """Latest seq of the last Profile Agent run's own DB writes (or that run's seq if it wrote
+    nothing). None means no Profile Agent ran, so every persisted-profile read is comparable.
+
+    If the Profile Agent ran more than once, only the latest run defines the cutoff: reads taken
+    before that run's persistence are excluded because the profile was persisted again afterwards.
+    The current workflow starts profile analysis exactly once and never routes a revision to it."""
+
+    runs = _runs(rec, "profile")
+    if not runs:
+        return None
+    run = runs[-1]
+    write_seqs = [rec.io[i]["seq"] for i in run["io_idx"]
+                  if rec.io[i]["category"] == "db_write"]
+    return max(write_seqs) if write_seqs else run["seq"]
+
+
 def c_profile_vs_db(rec, ctx):
     name = "profile_agent_output_vs_persisted_db_rows"
     ref = "DB profile read by the harness AFTER the run (independent of the agent's return value)"
@@ -547,16 +572,29 @@ def c_profile_vs_db(rec, ctx):
 
 def c_profile_views(rec, ctx):
     name = "profile_seen_by_downstream_agents_is_consistent"
-    ref = "independent get_user_full_profile reads in each stage + post-run DB read"
+    ref = "independent get_user_full_profile reads after profile persistence + post-run DB read"
     reads = [e for e in rec.raw_io if e["function"] == "get_user_full_profile" and not e["nested"]]
-    if len(reads) < 2:
-        return _res("X2", name, "UNAVAILABLE", ref, "-", "fewer than two profile reads recorded")
-    sigs = {e["seq"]: (e["stage"], _sig(e["result"])) for e in reads if e["result"] is not None}
+    cutoff = _profile_persistence_cutoff(rec)
+    if cutoff is None:
+        comparable, ignored = reads, []
+    else:
+        comparable = [e for e in reads if e["seq"] > cutoff]
+        ignored = [e for e in reads if e["seq"] <= cutoff]
+    sigs = {e["seq"]: (e["stage"], _sig(e["result"])) for e in comparable if e["result"] is not None}
+    # Two reads by the same agent do not show that different agents saw the same profile.
+    agent_stages = {stage for stage, _ in sigs.values() if stage in AGENT_SECTIONS}
     if ctx.get("post_run_profile") is not None:
         sigs[-1] = ("post_run", _sig(ctx["post_run_profile"]))
+    compared = {"reads_by_stage": dict(Counter(v[0] for v in sigs.values())),
+                "persistence_cutoff_seq": cutoff,
+                "ignored_pre_persistence_reads": [
+                    {"seq": e["seq"], "stage": e["stage"]} for e in ignored]}
+    # The post-run snapshot is a reference only: it never substitutes for a workflow agent read.
+    if len(agent_stages) < 2:
+        return _res("X2", name, "UNAVAILABLE", ref, compared,
+                    "fewer than two distinct workflow agents read the profile after persistence")
     distinct = {repr(v[1]) for v in sigs.values()}
-    return _res("X2", name, "PASS" if len(distinct) == 1 else "FAIL", ref,
-                {"reads_by_stage": dict(Counter(v[0] for v in sigs.values()))},
+    return _res("X2", name, "PASS" if len(distinct) == 1 else "FAIL", ref, compared,
                 None if len(distinct) == 1 else "profile signature differs between reads")
 
 
@@ -855,11 +893,17 @@ def build_artifact(rec: Recorder, ctx: dict) -> dict:
                 "careers", "skills", "career_skills", "occupations", "sources")),
             "kb_unchanged": (kb_before == kb_after if kb_before and kb_after else "unavailable"),
             "kb_version": "unavailable (not exposed by the implementation; Step 16 scope)",
+            "database": _safe_database_identity(ctx.get("database")),
             "git_commit": (
                 ctx["git_commit"] if isinstance(ctx.get("git_commit"), str)
                 and re.fullmatch(r"[A-Fa-f0-9]{40,64}", ctx["git_commit"])
                 else "unavailable"
             ),
+            "git_dirty": (
+                ctx["git_dirty"] if isinstance(ctx.get("git_dirty"), bool) else "unavailable"),
+            "git_diff_sha256": (
+                ctx["git_diff_sha256"] if isinstance(ctx.get("git_diff_sha256"), str)
+                and re.fullmatch(r"[0-9a-f]{64}", ctx["git_diff_sha256"]) else None),
             "harness_error": _safe_errors(ctx.get("harness_error")) if ctx.get("harness_error") else []},
         "workflow_execution": {
             "nodes_in_order": [event["node"] for event in trace],

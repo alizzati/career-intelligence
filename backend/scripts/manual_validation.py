@@ -7,7 +7,7 @@ from the knowledge base and the persisted profile. The artifact is written even 
 check fails. LLM = FakeLLM test double only; no live provider call is made by this script.
 
 WARNING: this creates and then deletes ONE synthetic user (by exact id) in the configured local
-`career_intelligence` database. It is not an isolated database.
+database. Use only with an isolated test database and explicit opt-in.
 """
 from __future__ import annotations
 
@@ -41,12 +41,54 @@ from app.agents.verification_agent import VerificationAgent
 from app.api.dependencies import get_workflow
 from app.core.db import get_engine
 from app.inspection.artifact import build_artifact
+from app.inspection.contract import validate_artifact
 from app.inspection.recorder import AgentProxy, Recorder, RecordingLLMClient
 from app.main import create_app
 from app.services import retrieval_service as rs
 from app.services import skill_gap_service
 from app.services import user_service as us
 from app.workflows.career_workflow import CareerWorkflow
+
+
+ALLOWED_E2E_DB = "career_intelligence_e2e_test"
+E2E_OPTIN_ENV = "CAREER_E2E_ISOLATED_DB_OK"
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+class ManualValidationSafetyError(RuntimeError):
+    """Fail-closed safety violation for manual validation runner."""
+
+
+def _validate_isolated_db_safety(engine) -> dict:
+    """Fail closed unless the configured and server-confirmed database is the isolated test DB.
+
+    Returns the effective identity recorded in the artifact. Credentials are deliberately not
+    included: only host, port, engine URL database, and the server-confirmed database name.
+    """
+    optin = os.environ.get(E2E_OPTIN_ENV, "")
+    if optin != ALLOWED_E2E_DB:
+        raise ManualValidationSafetyError(
+            "Manual validation requires explicit opt-in via CAREER_E2E_ISOLATED_DB_OK=career_intelligence_e2e_test."
+        )
+
+    url = engine.url
+    host = (url.host or "").lower()
+    if host not in LOOPBACK_HOSTS:
+        raise ManualValidationSafetyError("Manual validation requires a loopback database host.")
+
+    db_name = url.database
+    if db_name != ALLOWED_E2E_DB:
+        raise ManualValidationSafetyError("Manual validation only allowed on career_intelligence_e2e_test database.")
+
+    with engine.connect() as connection:
+        current_db = connection.execute(text("SELECT current_database()")).scalar_one()
+    if current_db != ALLOWED_E2E_DB:
+        raise ManualValidationSafetyError("Manual validation only allowed on career_intelligence_e2e_test database.")
+    if current_db == "career_intelligence":
+        raise ManualValidationSafetyError("Manual validation must not run against production database career_intelligence.")
+
+    return {"name": db_name, "host": host, "port": url.port if url.port is not None else 5432,
+            "server_current_database": current_db}
 
 
 SYNTHETIC_EMAIL = "synthetic.candidate@example.invalid"
@@ -230,10 +272,105 @@ def _independent_checks(*, api_output, target_id, profile, extracted_skills, pro
     return checks
 
 
-def _git_commit() -> str:
-    revision = subprocess.run(["git", "-C", str(BACKEND_ROOT.parent), "rev-parse", "--verify", "HEAD"],
-                              capture_output=True, text=True, check=False)
-    return revision.stdout.strip() if revision.returncode == 0 else "unavailable"
+def _git_provenance(repo_root: Path = BACKEND_ROOT.parent) -> dict:
+    """Base commit plus a content-sensitive digest of the current working-tree state.
+
+    A dirty tree is recorded explicitly instead of claiming that HEAD is what ran. The digest
+    covers the binary diff against HEAD and every untracked, non-ignored file (path + content
+    sha256). Only the digest is saved, never file contents or paths.
+    """
+    def git(*args):
+        return subprocess.run(["git", "-C", str(repo_root), *args],
+                              capture_output=True, check=False)
+
+    revision = git("rev-parse", "--verify", "HEAD")
+    if revision.returncode != 0:
+        return {"git_commit": "unavailable", "git_dirty": "unavailable", "git_diff_sha256": None}
+    commit = revision.stdout.decode("ascii", "ignore").strip()
+
+    status = git("status", "--porcelain=v1", "--untracked-files=all")
+    if status.returncode != 0:
+        return {"git_commit": commit, "git_dirty": "unavailable", "git_diff_sha256": None}
+    if not status.stdout.strip():
+        return {"git_commit": commit, "git_dirty": False, "git_diff_sha256": None}
+
+    diff = git("diff", "--binary", "HEAD")
+    untracked = git("ls-files", "--others", "--exclude-standard", "-z")
+    if diff.returncode != 0 or untracked.returncode != 0:
+        return {"git_commit": commit, "git_dirty": "unavailable", "git_diff_sha256": None}
+    digest = hashlib.sha256(diff.stdout)
+    try:
+        for raw_path in untracked.stdout.split(b"\0"):
+            if not raw_path:
+                continue
+            digest.update(raw_path)
+            digest.update(b"\0")
+            digest.update(hashlib.sha256((repo_root / raw_path.decode("utf-8", "surrogateescape")).read_bytes()).digest())
+    except OSError:
+        # Fail closed: a dirty tree without a reproducible digest fails the artifact contract.
+        return {"git_commit": commit, "git_dirty": True, "git_diff_sha256": None}
+    return {"git_commit": commit, "git_dirty": True, "git_diff_sha256": digest.hexdigest()}
+
+
+def _cleanup_synthetic_user(engine, user_id: int) -> tuple[bool, dict]:
+    """Delete every row written for the synthetic user, child tables first.
+
+    The order follows the user-table dependencies documented in MASTER_SPEC and the writes in
+    user_repository.py, so cleanup does not depend on undocumented ON DELETE CASCADE behaviour.
+    The transaction is rolled back if any statement fails. After deletion, each table is
+    re-counted for this exact user id; a non-zero remainder fails the H9 evidence check.
+    """
+    deleted, remaining = {}, {}
+    with engine.begin() as connection:
+        params = {"user_id": user_id}
+        deleted["user_skill_evidence"] = connection.execute(text(
+            "DELETE FROM user_skill_evidence WHERE user_skill_id IN "
+            "(SELECT user_skill_id FROM user_skills WHERE user_id = :user_id)"), params).rowcount
+        remaining["user_skill_evidence"] = connection.execute(text(
+            "SELECT count(*) FROM user_skill_evidence WHERE user_skill_id IN "
+            "(SELECT user_skill_id FROM user_skills WHERE user_id = :user_id)"), params).scalar_one()
+        for table, statement in (
+            ("user_skills", text("DELETE FROM user_skills WHERE user_id = :user_id")),
+            ("user_preferences", text("DELETE FROM user_preferences WHERE user_id = :user_id")),
+            ("user_education", text("DELETE FROM user_education WHERE user_id = :user_id")),
+            ("user_experience", text("DELETE FROM user_experience WHERE user_id = :user_id")),
+            ("user_projects", text("DELETE FROM user_projects WHERE user_id = :user_id")),
+            ("user_certifications", text("DELETE FROM user_certifications WHERE user_id = :user_id")),
+            ("user_profiles", text("DELETE FROM user_profiles WHERE user_id = :user_id")),
+            ("users", text("DELETE FROM users WHERE user_id = :user_id")),
+        ):
+            deleted[table] = connection.execute(statement, params).rowcount
+
+        remaining["user_skills"] = connection.execute(
+            text("SELECT count(*) FROM user_skills WHERE user_id = :user_id"), params).scalar_one()
+        remaining["user_preferences"] = connection.execute(
+            text("SELECT count(*) FROM user_preferences WHERE user_id = :user_id"), params).scalar_one()
+        remaining["user_education"] = connection.execute(
+            text("SELECT count(*) FROM user_education WHERE user_id = :user_id"), params).scalar_one()
+        remaining["user_experience"] = connection.execute(
+            text("SELECT count(*) FROM user_experience WHERE user_id = :user_id"), params).scalar_one()
+        remaining["user_projects"] = connection.execute(
+            text("SELECT count(*) FROM user_projects WHERE user_id = :user_id"), params).scalar_one()
+        remaining["user_certifications"] = connection.execute(
+            text("SELECT count(*) FROM user_certifications WHERE user_id = :user_id"), params).scalar_one()
+        remaining["user_profiles"] = connection.execute(
+            text("SELECT count(*) FROM user_profiles WHERE user_id = :user_id"), params).scalar_one()
+        remaining["users"] = connection.execute(
+            text("SELECT count(*) FROM users WHERE user_id = :user_id"), params).scalar_one()
+
+    ok = deleted.get("users") == 1 and all(count == 0 for count in remaining.values())
+    return ok, {"deleted": deleted, "remaining": remaining}
+
+
+def _final_verdict(artifact: dict, *, harness_error, independent) -> tuple[bool, dict, list[str]]:
+    """One verdict: harness, independent checks, cross-stage checks, and the artifact contract."""
+    summary = artifact["cross_stage_checks"]["summary"]
+    violations = validate_artifact(artifact)
+    ok = (harness_error is None
+          and all(check["result"] == "PASS" for check in independent)
+          and not ({"FAIL", "ERROR"} & set(summary))
+          and not violations)
+    return ok, summary, violations
 
 
 def run() -> int:
@@ -241,13 +378,11 @@ def run() -> int:
     os.environ["CAREER_API_ALLOW_REMOTE_CLIENTS"] = "true"   # TestClient host is "testclient"
 
     engine = get_engine()
-    if (engine.url.host or "").lower() not in {"localhost", "127.0.0.1", "::1"}:
-        raise RuntimeError("Diagnostic runner requires a loopback PostgreSQL database.")
+    database_identity = _validate_isolated_db_safety(engine)
     with engine.connect() as connection:
-        database_name = connection.execute(text("SELECT current_database()")).scalar_one()
         career_count = connection.execute(text("SELECT count(*) FROM careers")).scalar_one()
-    if database_name != "career_intelligence" or career_count != 10:
-        raise RuntimeError("Diagnostic runner requires the local canonical Knowledge Base.")
+    if career_count != 10:
+        raise RuntimeError("Diagnostic runner requires the local canonical Knowledge Base with 10 careers.")
     kb_before = _kb_counts(engine)
 
     careers = rs.get_all_careers()
@@ -313,15 +448,13 @@ def run() -> int:
         harness_error = [{"stage": "harness", "error_type": type(exc).__name__}]
     finally:
         root_logger.removeHandler(captured)
-        cleanup_ok = None
+        cleanup_ok, cleanup_details = None, None
         if synthetic_user_id is not None:
             try:
-                with engine.begin() as connection:
-                    deleted = connection.execute(text("DELETE FROM users WHERE user_id = :user_id"),
-                                                 {"user_id": synthetic_user_id}).rowcount
-                cleanup_ok = deleted == 1
-            except Exception:
+                cleanup_ok, cleanup_details = _cleanup_synthetic_user(engine, synthetic_user_id)
+            except Exception as exc:   # type only: messages may carry sensitive text
                 cleanup_ok = False
+                cleanup_details = {"error_type": type(exc).__name__}
             if not cleanup_ok:
                 print(f"WARNING: synthetic user {synthetic_user_id} may still exist; delete it by exact id.")
 
@@ -332,7 +465,8 @@ def run() -> int:
     independent.append(_check("H8", "synthetic PII absent from LLM prompts, logs and API response",
                               not any(leaks.values()), leaks))
     if synthetic_user_id is not None:
-        independent.append(_check("H9", "synthetic user deleted by exact id", bool(cleanup_ok), None))
+        independent.append(_check("H9", "synthetic user and child rows deleted by exact id",
+                                  bool(cleanup_ok), cleanup_details))
 
     final_state = workflow.final_state or {"final_status": "ERROR", "revision_count": 0,
                                            "target_career_id": None, "errors": []}
@@ -340,6 +474,7 @@ def run() -> int:
         sdk_version = metadata.version("google-genai")
     except metadata.PackageNotFoundError:
         sdk_version = "unavailable (google-genai package metadata not installed)"
+    provenance = _git_provenance()
     artifact = build_artifact(recorder, {
         "run_id": run_id, "started_at": started_at,
         "mode": "fake_llm_database_backed",
@@ -354,18 +489,21 @@ def run() -> int:
         "scoring_weights": workflow.career_recommendation_agent._target.weights,
         "versions": {"python": sys.version.split()[0], "google_genai_sdk": sdk_version},
         "kb_counts_before": kb_before, "kb_counts_after": kb_after,
-        "git_commit": _git_commit(), "post_run_profile": post_run_profile,
+        "database": database_identity,
+        "git_commit": provenance["git_commit"], "git_dirty": provenance["git_dirty"],
+        "git_diff_sha256": provenance["git_diff_sha256"],
+        "post_run_profile": post_run_profile,
         "harness_error": harness_error, "independent_checks": independent,
     })
 
     output_file = _write_artifact(artifact, BACKEND_ROOT / "artifacts" / "manual_validation")
-    summary = artifact["cross_stage_checks"]["summary"]
-    ok = (harness_error is None and all(c["result"] == "PASS" for c in independent)
-          and not ({"FAIL", "ERROR"} & set(summary)))
+    ok, summary, violations = _final_verdict(
+        artifact, harness_error=harness_error, independent=independent)
     print(json.dumps({"artifact": str(output_file), "status": "PASS" if ok else "FAIL",
                       "final_status": final_state.get("final_status"),
                       "cross_stage_summary": summary,
                       "independent_checks": {c["id"]: c["result"] for c in independent},
+                      "contract_violations": violations,
                       "harness_error": harness_error, "llm_call_count": len(llm.calls)}, indent=2))
     return 0 if ok else 1
 

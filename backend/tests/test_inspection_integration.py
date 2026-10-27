@@ -190,7 +190,7 @@ class FailOnceVerifier:
         return self.real.run(recommendations, skill_gap, roadmap)
 
 
-def run_inspected(memory, llm, *, wrap_verifier=None):
+def run_inspected(memory, llm, *, wrap_verifier=None, precheck_profile_read=False):
     rec = Recorder()
     client = RecordingLLMClient(llm, rec)
     verifier = VerificationAgent(llm_client=client)
@@ -204,6 +204,8 @@ def run_inspected(memory, llm, *, wrap_verifier=None):
         verification_agent=AgentProxy(rec, "verification", wrap_verifier(verifier) if wrap_verifier else verifier))
     with rec.instrument(rs=rs, us=us, fit_modules=(career_agent_module, skill_gap_service,
                                                    verification_agent_module)):
+        if precheck_profile_read:                       # API existence check before the workflow
+            assert us.get_user_full_profile(1) is not None
         state = workflow.run(user_id=1, target_career_id="C1", raw_profile_text=RAW_CV,
                              observer=rec.observer)
     artifact = art.build_artifact(rec, {
@@ -213,6 +215,8 @@ def run_inspected(memory, llm, *, wrap_verifier=None):
         "max_revisions": 2, "llm_client": client,
         "llm": {"client_type": type(llm).__name__, "test_double": True},
         "scoring_weights": workflow.career_recommendation_agent._target.weights,
+        "database": {"name": "career_intelligence_e2e_test", "host": "localhost", "port": 5433,
+                     "server_current_database": "career_intelligence_e2e_test"},
         "post_run_profile": memory.get_user_full_profile(1)})
     return artifact, state, rec
 
@@ -261,6 +265,32 @@ def test_real_workflow_on_in_memory_kb_populates_artifact_and_restores_instrumen
     # instrumentation restored: the module attributes are the store's own bound methods again
     assert us.get_user_full_profile == memory.get_user_full_profile
     assert us.add_user_skill == memory.add_user_skill
+
+
+def test_x2_regression_excludes_precheck_before_profile_persistence(memory):
+    """Real Recorder: an API-style read before the Profile Agent must not be compared by X2."""
+    artifact, state, rec = run_inspected(memory, FakeScriptedLLM(), precheck_profile_read=True)
+
+    assert state["final_status"] == "VERIFIED"
+    assert artifact["run_metadata"]["llm"]["calls_total"] == 6
+    x2 = next(c for c in artifact["cross_stage_checks"]["checks"] if c["id"] == "X2")
+    assert x2["result"] == "PASS"
+
+    cutoff = x2["compared"]["persistence_cutoff_seq"]
+    profile_run = next(r for r in rec.agent_runs if r["agent"] == "profile")
+    write_seqs = [rec.io[i]["seq"] for i in profile_run["io_idx"]
+                  if rec.io[i]["category"] == "db_write"]
+    assert write_seqs and cutoff == max(write_seqs)
+    assert x2["compared"]["ignored_pre_persistence_reads"] == [
+        {"seq": 1, "stage": "workflow"}]
+    assert x2["compared"]["reads_by_stage"] == {
+        "career_recommendation": 1, "skill_gap": 1, "verification": 1, "post_run": 1}
+
+    reads = [(e["seq"], e["stage"]) for e in rec.raw_io
+             if e["function"] == "get_user_full_profile" and not e["nested"]]
+    assert reads[0] == (1, "workflow")
+    downstream = [seq for seq, stage in reads if stage != "workflow"]
+    assert len(downstream) == 3 and all(seq > cutoff for seq in downstream)
 
 
 def test_revision_path_is_recorded_with_real_agents(memory):
