@@ -24,8 +24,8 @@ Hybrid Verified Multi-Agent Career Intelligence System for IT Graduates.
 * Step 14.4: Insert-only user skill ingestion.
 * Step 15: React/Vite frontend over the existing API.
 
-Step 16 is only partially complete and is therefore not listed as a completed
-step; see its record below.
+Step 16: Inspection, career-fit verification, artifact contract, and guarded
+isolated-database validation (see its record below).
 
 Steps 5–11 regression tests were run locally during Step 12 implementation and passed.
 Step 12 deterministic checks and mocked semantic-review tests passed; a local-KB
@@ -34,12 +34,11 @@ Step 13's focused tests and local workflow integration run passed.
 
 ## Current Checkpoint
 
-As of 2026-10-26, Step 15 is complete and Step 16 is partially complete. The
-HEAD commit is `48af133` ("updated project state"), which contains only the
-documentation update; the X2 profile-view fix, the artifact contract, the
-preflight fixes (database identity, dirty-tree provenance, contract verdict,
-child-row cleanup), and the isolated-database guards are working-tree changes
-that have not been committed. Step 17 has not started.
+As of 2026-10-27, Steps 1–16 are complete. The HEAD commit is `1921d30`
+("update project state"); the Step 16 code, tests, and documentation were
+committed in `ebf83fd` and `1921d30`. The guarded manual-validation run produced
+`619d709...` after the X2 fix with 11/11 cross-stage checks PASS, H1–H9 PASS,
+and zero contract violations. Step 17 has not started.
 
 Verified during this reconciliation:
 
@@ -51,9 +50,10 @@ Verified during this reconciliation:
 * `python -m py_compile` on the changed inspection/runner/test files passed;
   `git diff --check` passed (one pre-existing LF/CRLF notice for
   `backend/scripts/import_kb.py`).
-* No manual-validation artifact produced after the X2 fix exists. The latest
-  artifact (`facb708...`, 2026-10-25) predates the fix and recorded 10 PASS / 1
-  FAIL (X2) from the pre-hardening runner. See the Step 16 record.
+* The post-fix manual-validation artifact `619d709...` (2026-10-27) records
+  11/11 cross-stage PASS (including X2) and H1–H9 PASS, and passes
+  `scripts/check_artifact.py` with zero violations. See the final acceptance
+  audit in the Step 16 record.
 
 The database-backed runtime tests and live LLM behavior were not run during
 this reconciliation. Earlier results for those remain prior evidence, not
@@ -134,13 +134,9 @@ freshly verified facts.
 
 ## Pending Work
 
-1. Finish Step 16 (currently partial). After explicit approval, run the guarded
-   manual-validation runner only against `career_intelligence_e2e_test` (or
-   exercise the same path with an equivalent isolated fixture), regenerate a
-   `manual_validation/0.3` artifact, confirm X2 and all cross-stage/independent
-   checks pass, validate the artifact with
-   `app.inspection.contract.validate_artifact`, and commit the X2/contract/guard
-   changes. Do not use the main `career_intelligence` database.
+1. Step 16 is complete; no further E2E run is required. Optional only if the
+   researcher rejects the recorded dirty-tree overlay: one guarded rerun from a
+   literally clean HEAD (the overlay was non-code task notes, not system code).
 2. Implement the Step 17 evaluation framework (not started).
 3. Implement and evaluate Step 18 baseline and ablation configurations.
 4. Step 19 full test matrix and Step 20 end-to-end experiments remain pending.
@@ -476,10 +472,10 @@ freshly verified facts.
 
 ## Step 16 Inspection and Career-Fit Verification Record
 
-Status: **PARTIAL** (not complete). The inspection path and independent scoring
-checks are implemented and tested offline, but no artifact produced after the
-X2 fix from the guarded isolated database exists, and the relevant
-working-tree changes are not committed.
+Status: **COMPLETE** (2026-10-27). The guarded isolated-database run produced
+`619d709...` after the X2 fix; all 11 cross-stage checks (including X2) and
+H1–H9 pass, the artifact contract reports zero violations, and the work is
+committed.
 
 ### One artifact path and runtime metadata
 
@@ -526,9 +522,9 @@ working-tree changes are not committed.
   `backend/tests/test_manual_validation_workflow.py`,
   `backend/tests/test_career_fit_independent_verification.py`,
   `backend/tests/test_career_fit_edge_cases.py`, and this state record.
-  Working-tree follow-up files are listed under X2 hardening below.
+  Follow-up files are listed under X2 hardening below.
 
-### X2 profile-view hardening (working tree, uncommitted)
+### X2 profile-view hardening (committed in ebf83fd)
 
 * X2 previously compared every `get_user_full_profile` read. A read taken
   before the Profile Agent persisted the CV (for example the API's
@@ -644,12 +640,12 @@ no tests were re-run for this audit.
 * Offline focused suite: **126 passed, 1 warning** (10 files; command under
   Tests and checks). `py_compile` passed; `git diff --check` passed except the
   pre-existing LF/CRLF notice for `scripts/import_kb.py`.
-* Remaining: no post-fix artifact from the guarded isolated database exists;
-  cleanup SQL and table names are validated only with mocks; isolated-DB
-  readiness and actual FK behaviour are unverified; guard and KB-precondition
-  failures still occur before the artifact is written; the changes are
-  uncommitted, so a run now records a dirty digest instead of a clean commit.
-* **Step 16 remains PARTIAL.**
+* At the time of this audit: no post-fix artifact from the guarded isolated
+  database existed; cleanup SQL and table names were validated only with mocks;
+  isolated-DB readiness and actual FK behaviour were unverified; and the
+  changes were uncommitted, so a run would have recorded a dirty digest. These
+  were resolved on 2026-10-27 (see the final acceptance audit).
+* Step 16 remained PARTIAL at the time of this audit.
 
 ### Final readiness audit (2026-10-26)
 
@@ -677,7 +673,8 @@ contacted, and no DB-backed test, KB import, or live LLM/API call was made.
   Step 16 tree with `git_dirty = false` so `git_commit` identifies exactly what
   produced the artifact.
 * Re-ran the 10-file offline suite during this audit: **126 passed, 1 warning**.
-* **Step 16 remains PARTIAL.**
+* Step 16 remained PARTIAL at the time of that audit; it was closed on
+  2026-10-27 (see the final acceptance audit below).
 
 ### Tests and checks
 
@@ -702,33 +699,66 @@ contacted, and no DB-backed test, KB import, or live LLM/API call was made.
   PostgreSQL and the KB with in-memory stand-ins. They do not establish a real
   database run or live-model behavior.
 
+### Final acceptance audit (2026-10-27)
+
+Read-only audit of the guarded run's artifact. No database connection, SQL,
+KB import, live LLM call, or rerun was made; the artifact was validated with
+`scripts/check_artifact.py`.
+
+* Latest artifact: `backend/artifacts/manual_validation/619d7091a5674dbe92311630a93dc112.json`
+  (267630 bytes, SHA-256 `F25992...F5B0`), schema `manual_validation/0.3`,
+  started 2026-10-27T05:04:02Z, duration 3634.7 ms, FakeLLM test double,
+  14 calls / 0 failures.
+* Contract: `check_artifact.py` → **`CONTRACT OK`**, exit 0, zero violations.
+* Cross-stage: **11/11 PASS**, including **X2 PASS** with
+  `persistence_cutoff_seq = 11`, `ignored_pre_persistence_reads =
+  [{seq: 1, stage: "workflow"}]`, and compared reads for
+  career_recommendation, skill_gap, verification, and post_run.
+* Independent: **H1–H9 PASS**. H9 records deleted rows (evidence 1, skills 3,
+  education 1, projects 1, users 1; others 0) and **remaining = 0 in all nine
+  user tables**.
+* Workflow: `final_status = VERIFIED`, `verified = true`, revision_count 0,
+  `errors = []`, `instrumentation_warnings = []`, `harness_error = []`.
+* Isolated DB: `{name: career_intelligence_e2e_test, host: localhost,
+  port: 5433, server_current_database: career_intelligence_e2e_test}`.
+* KB: before = after = 10 careers / 87 skills / 155 career_skills /
+  8 occupations; `kb_unchanged = true`. `kb_version` is still explicitly
+  unavailable.
+* Provenance: `git_commit = 1921d30` (still HEAD), `git_dirty = true`,
+  `git_diff_sha256 = df01dc...`. The run began at 13:04 +08:00; `1921d30` was
+  created at 13:02:51 and `ebf83fd` (all Step 16 code) at 12:53:15.
+  `git diff ebf83fd..HEAD -- backend` is empty and no Step 16 file has a
+  post-run modification time, so the code under test is the committed HEAD.
+  The dirty overlay was non-code files (`.gitignore` ignore-rule edit at 12:51
+  plus task-note markdowns). The recorded digest cannot be recomputed today
+  because `opencode_instruction.md` was edited at 13:10, after the run.
+* The artifact does not persist the runner's literal exit code. Recomputing
+  `_final_verdict()` from its inputs (empty harness error, H1–H9 PASS, no
+  cross-stage FAIL/ERROR, zero contract violations) yields PASS.
+* No static FK/DDL inventory exists in the repository. H9 proves runtime
+  cleanup for the nine tables the user domain writes; tables never written are
+  not exercised.
+
 ### Remaining limitations and decision
 
-* The X2 fix, `backend/app/inspection/contract.py`, the preflight-fix changes to
-  `backend/app/inspection/artifact.py` and `backend/scripts/manual_validation.py`,
-  `backend/tests/test_artifact_contract.py`,
-  `backend/tests/test_inspection_profile_views.py`, the isolated-DB guard, and
-  the KB-import guard are uncommitted working-tree changes. Git HEAD is
-  `48af133` (documentation only), so a run records a dirty-tree digest rather
-  than a clean commit.
-* The guarded runner's database checks, database identity recording, and
-  child-row cleanup are unit-tested with mocks only; no real isolated-DB run
-  proves the guard, cleanup, KB counts, or artifact contract against
-  `career_intelligence_e2e_test`. The actual e2e schema, FK cascade behaviour,
-  and isolated-DB readiness remain unverified.
-* `validate_artifact()` now requires `run_metadata.database` and the
-  `git_dirty`/`git_diff_sha256` provenance pair; all older artifacts, including
-  `facb708...`, fail the contract for these missing fields in addition to the
-  recorded X2 FAIL.
+* The isolated-DB guard, DB identity recording, child-row cleanup, and
+  contract are now proven against `career_intelligence_e2e_test` for the
+  synthetic path, not only by mocks.
+* The artifact's provenance is dirty (`git_dirty = true`) even though the code
+  under test is committed at the recorded HEAD; see the final acceptance audit
+  for the non-code overlay and the non-reproducible digest.
+* The schema/FK graph and triggers are still not inventoried from files or a DB
+  query. H9 proves zero remaining rows in the nine written user tables; it does
+  not prove the absence of unrelated tables that reference `users` but were
+  never written.
 * No live LLM/provider call was made. FakeLLM establishes path and privacy
   behavior only; provider/model settings, SDK defaults, retry behavior, and
   real-model quality remain unverified. KB version is explicitly unavailable.
-* The current workflow final status (`VERIFIED`) is not evidence that X2 or the
-  artifact contract passes after the fix.
-* **Decision: Step 16 remains PARTIAL.** It becomes complete only after a
-  post-fix artifact is generated through the guarded isolated-DB path (or an
-  equivalent isolated fixture), all cross-stage/independent checks pass,
-  `validate_artifact` reports no violations, and the changes are committed.
+* **Decision: Step 16 is COMPLETE.** The formal criteria — post-fix artifact
+  from the guarded isolated-DB path, 11/11 cross-stage PASS including X2,
+  H1–H9 PASS, zero contract violations, and committed changes — are met. A
+  literally clean-tree artifact would require one guarded rerun from clean
+  HEAD; it is optional and not needed for functional or contract acceptance.
 
 Do not mark pending work complete without inspecting the code and running the relevant tests.
 
