@@ -35,16 +35,19 @@ Step 13's focused tests and local workflow integration run passed.
 ## Current Checkpoint
 
 As of 2026-10-26, Step 15 is complete and Step 16 is partially complete. The
-last committed checkpoint is `e9f09ee` ("step 16 partially completed"); the X2
-profile-view fix, the artifact contract, and the isolated-database guards are
-working-tree changes that have not been committed. Step 17 has not started.
+HEAD commit is `48af133` ("updated project state"), which contains only the
+documentation update; the X2 profile-view fix, the artifact contract, the
+preflight fixes (database identity, dirty-tree provenance, contract verdict,
+child-row cleanup), and the isolated-database guards are working-tree changes
+that have not been committed. Step 17 has not started.
 
 Verified during this reconciliation:
 
 * Frontend: `npm run typecheck` passed; `npm test` passed with **2 files, 10
   tests** (see the Step 15 record).
-* Step 16 focused offline suites: **117 passed, 1 warning** (see the Step 16
-  record).
+* Step 16 focused offline suites after the preflight fixes: **126 passed, 1
+  warning**; the same files gave 117 passed before those tests were added (see
+  the Step 16 record).
 * `python -m py_compile` on the changed inspection/runner/test files passed;
   `git diff --check` passed (one pre-existing LF/CRLF notice for
   `backend/scripts/import_kb.py`).
@@ -567,9 +570,14 @@ working-tree changes are not committed.
   not record the database name; the runner at its recorded commit `e9f09ee`
   required `current_database() == "career_intelligence"`, so it did not
   exercise the current `career_intelligence_e2e_test` guard.
-* Running `app.inspection.contract.validate_artifact()` on the latest artifact
-  returns exactly one violation: "a cross-stage check reported FAIL" (X2). It
-  reports no schema, provenance, or privacy-path violation.
+* Re-validated on 2026-10-27 with `scripts/check_artifact.py`: the latest
+  artifact now returns **6 violations**, because the contract has since added
+  the isolated-database and provenance fields. They are the three missing
+  `run_metadata` fields (`database`, `git_dirty`, `git_diff_sha256`), the
+  matching type checks (`database` must be an object; `git_dirty` must be
+  boolean/`unavailable`), and "a cross-stage check reported FAIL" (X2). The
+  artifact therefore fails the current contract for evidence-format reasons as
+  well as for the X2 result; it is not a post-fix artifact.
 * No artifact has been generated after the X2 fix, and no artifact records use
   of the guarded isolated database. The artifact was not regenerated during
   this reconciliation.
@@ -594,39 +602,97 @@ no tests were re-run for this audit.
   `CAREER_DB_NAME` and must not set `CAREER_DB_URL`.
 * The guard does not check the port. Both local databases are reached at
   `localhost:5433`, so the database-name check, not the port, is the
-  distinguishing safety boundary. The artifact records neither the database
-  name nor the host/port.
-* A run started from the current working tree would record `git_commit` =
-  `e9f09ee` (still HEAD) although the X2 fix, contract, guard, and tests are
-  uncommitted and several helper scripts are untracked. `build_artifact`
-  records no dirty flag, so the revision claim would be misleading.
-* The runner returns a nonzero code when its own cross-stage or independent
-  checks fail, but it never calls
-  `app.inspection.contract.validate_artifact`. Schema, privacy, provenance, and
-  contract validation remain a separate manual step.
-* Cleanup deletes only the `users` row by exact id and reports H9. Cascade
-  deletion of `user_profiles`, `user_*`, `user_skills`, and
-  `user_skill_evidence` cannot be verified from source without connecting; the
-  existing database tests use the same single delete.
+  distinguishing safety boundary. The effective port is now recorded but not
+  used as a guard.
 * Isolated-database readiness (schema plus exactly ten careers) cannot be
   verified offline. The runner checks `career_count == 10` before any mutation,
   so an unprepared database fails safely instead of producing evidence.
-* Consequence: the current tree is safe to try only after explicitly overriding
-  the database name, but it is **not ready to produce Step 16 evidence** until
-  the revision is committed, the artifact records the effective database
-  identity, and artifact-contract validation is part of the run.
+
+### Preflight fixes implemented (2026-10-26)
+
+* **Database identity in the artifact.** `_validate_isolated_db_safety()` now
+  returns, and the runner records, `name`, `host`, `port`, and the
+  server-confirmed `server_current_database` under `run_metadata.database`.
+  No user name, password, or connection URL is stored. `validate_artifact()`
+  requires the exact e2e name, a loopback host, a valid port, matching
+  URL/server-confirmed names, and rejects credential-like extra fields.
+* **Truthful provenance.** `_git_provenance()` records the base `git_commit`,
+  `git_dirty`, and `git_diff_sha256` (SHA-256 over the binary diff against HEAD
+  plus each untracked, non-ignored file's path and content digest). The
+  contract requires a 64-char digest when the tree is dirty and forbids one
+  when clean. Only digests are stored, never file contents or paths.
+* **Contract in the verdict.** The runner calls
+  `app.inspection.contract.validate_artifact()` through `_final_verdict()`;
+  contract violations, cross-stage FAIL/ERROR, failed independent checks, or a
+  harness error now all force a nonzero exit. Violation messages contain paths
+  and rules only.
+* **Full synthetic-user cleanup.** `_cleanup_synthetic_user()` deletes
+  `user_skill_evidence` first, then `user_skills`, `user_preferences`,
+  `user_education`, `user_experience`, `user_projects`,
+  `user_certifications`, `user_profiles`, and finally `users`, all by the
+  exact user id and in one transaction. It then re-counts every table and
+  fails H9 unless all remainders are zero; per-table deleted/remaining counts
+  are recorded in H9. Cleanup no longer depends on undocumented cascade
+  behaviour. The actual e2e schema and cascade have not been exercised.
+* The fail-closed guard is unchanged in order and remains the only database
+  gate. No production database was contacted and no runner or DB-backed test
+  was executed.
+* Older `manual_validation/0.3` artifacts lack `database`, `git_dirty`, and
+  `git_diff_sha256`; `validate_artifact()` now rejects them. The schema version
+  was not bumped because the fields are additive and no post-fix artifact
+  exists yet.
+* Offline focused suite: **126 passed, 1 warning** (10 files; command under
+  Tests and checks). `py_compile` passed; `git diff --check` passed except the
+  pre-existing LF/CRLF notice for `scripts/import_kb.py`.
+* Remaining: no post-fix artifact from the guarded isolated database exists;
+  cleanup SQL and table names are validated only with mocks; isolated-DB
+  readiness and actual FK behaviour are unverified; guard and KB-precondition
+  failures still occur before the artifact is written; the changes are
+  uncommitted, so a run now records a dirty digest instead of a clean commit.
+* **Step 16 remains PARTIAL.**
+
+### Final readiness audit (2026-10-26)
+
+Static/offline audit only: the runner was not executed, no database was
+contacted, and no DB-backed test, KB import, or live LLM/API call was made.
+
+* **Schema/FK coverage is not verifiable offline.** The repository tracks no
+  DDL, migrations, ORM models, or `CREATE TABLE` statements. `user_repository.py`
+  is the only user-domain write path: it writes `users`, `user_profiles`,
+  `user_education`, `user_experience`, `user_projects`,
+  `user_certifications`, `user_skills`, and `user_skill_evidence`;
+  `user_preferences` is read-only. `_cleanup_synthetic_user()` covers all nine
+  user tables and deletes evidence before skills before the user row. The
+  analysis tables named in MASTER_SPEC are not written anywhere in
+  `backend/app`. The real FK graph, cascade rules, triggers, and any additional
+  table referencing `users` remain **unverified** until the read-only
+  `information_schema` inventory is approved and run.
+* **X2 scope and completion gate.** `c_profile_views()` compares only the
+  skill-level signature (skill id, evidence status, proficiency, evidence
+  count), not education/experience/projects/certifications. The artifact
+  contract and `_final_verdict()` treat `UNAVAILABLE` as non-failing, so
+  Step 16 completion must require X2 = `PASS`, not merely the absence of FAIL.
+* **Provenance gate.** A dirty tree with a valid reproducible digest satisfies
+  the artifact contract, but Step 16 evidence should come from a committed
+  Step 16 tree with `git_dirty = false` so `git_commit` identifies exactly what
+  produced the artifact.
+* Re-ran the 10-file offline suite during this audit: **126 passed, 1 warning**.
+* **Step 16 remains PARTIAL.**
 
 ### Tests and checks
 
-* Re-executed offline on 2026-10-26 from `backend`:
-  * `python -m pytest tests\test_inspection_core.py tests\test_inspection_integration.py tests\test_inspection_profile_views.py tests\test_inspection_serialization.py tests\test_artifact_contract.py tests\test_manual_validation_gate.py tests\test_manual_validation_workflow.py tests\test_career_fit_independent_verification.py tests\test_career_fit_edge_cases.py tests\test_career_workflow_unit.py -q -p no:cacheprovider`
-    — **117 passed, 1 warning** (LangChain pending-deprecation).
-  * `python -m py_compile app\inspection\artifact.py app\inspection\contract.py scripts\manual_validation.py tests\test_inspection_profile_views.py tests\test_inspection_integration.py tests\test_artifact_contract.py tests\test_manual_validation_gate.py`
+* Preflight-fix re-run on 2026-10-26 from `backend` (offline files only; no
+  database, runner, KB import, or live model):
+  * `.\.venv\Scripts\python.exe -m pytest tests\test_manual_validation_gate.py tests\test_artifact_contract.py tests\test_inspection_integration.py tests\test_inspection_core.py tests\test_inspection_profile_views.py tests\test_inspection_serialization.py tests\test_manual_validation_workflow.py tests\test_career_fit_independent_verification.py tests\test_career_fit_edge_cases.py tests\test_career_workflow_unit.py -q -p no:cacheprovider`
+    — **126 passed, 1 warning** (LangChain pending-deprecation).
+  * `.\.venv\Scripts\python.exe -m py_compile app\inspection\artifact.py app\inspection\contract.py scripts\manual_validation.py tests\test_manual_validation_gate.py tests\test_artifact_contract.py tests\test_inspection_integration.py`
     — passed.
   * `git diff --check` — passed (pre-existing LF/CRLF notice for
     `backend/scripts/import_kb.py`).
-  * `upload/cv2.pdf` exists at the repository root (217740 bytes) but was not
-    read, parsed, or used; the executed tests use synthetic fixtures.
+* Prior reconciliation run on 2026-10-26: the same 10 files gave **117 passed,
+  1 warning** before the preflight fixes and tests were added.
+* `upload/cv2.pdf` exists at the repository root (217740 bytes) but was not
+  read, parsed, or used; the executed tests use synthetic fixtures.
 * Previously recorded but **not re-executed during this reconciliation**:
   focused inspection/workflow/scoring tests (51 passed), broader offline
   regressions (187 passed, 10 deselected, 1 warning), and the career-fit,
@@ -638,14 +704,22 @@ no tests were re-run for this audit.
 
 ### Remaining limitations and decision
 
-* The X2 fix, `backend/app/inspection/contract.py`,
+* The X2 fix, `backend/app/inspection/contract.py`, the preflight-fix changes to
+  `backend/app/inspection/artifact.py` and `backend/scripts/manual_validation.py`,
   `backend/tests/test_artifact_contract.py`,
   `backend/tests/test_inspection_profile_views.py`, the isolated-DB guard, and
-  the KB-import guard are uncommitted working-tree changes. Git still points to
-  `e9f09ee`.
-* The guarded runner's database checks are unit-tested with mocks only; no real
-  isolated-DB run proves the guard, cleanup, KB counts, or artifact contract
-  against `career_intelligence_e2e_test`.
+  the KB-import guard are uncommitted working-tree changes. Git HEAD is
+  `48af133` (documentation only), so a run records a dirty-tree digest rather
+  than a clean commit.
+* The guarded runner's database checks, database identity recording, and
+  child-row cleanup are unit-tested with mocks only; no real isolated-DB run
+  proves the guard, cleanup, KB counts, or artifact contract against
+  `career_intelligence_e2e_test`. The actual e2e schema, FK cascade behaviour,
+  and isolated-DB readiness remain unverified.
+* `validate_artifact()` now requires `run_metadata.database` and the
+  `git_dirty`/`git_diff_sha256` provenance pair; all older artifacts, including
+  `facb708...`, fail the contract for these missing fields in addition to the
+  recorded X2 FAIL.
 * No live LLM/provider call was made. FakeLLM establishes path and privacy
   behavior only; provider/model settings, SDK defaults, retry behavior, and
   real-model quality remain unverified. KB version is explicitly unavailable.
