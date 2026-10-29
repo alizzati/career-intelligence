@@ -14,6 +14,7 @@ from app.api.responses import finish
 from app.api.uploads import read_upload_bounded
 from app.core.config import ApiSettings, get_settings
 from app.schemas.api import AnalysisResponse, ErrorResponse, ExistingProfileRequest
+from app.services import analysis_log_service
 from app.services import retrieval_service as rs
 from app.services import user_service as us
 from app.services.cv_text_extraction_service import CVTextExtractionError, CVTextExtractor
@@ -41,6 +42,20 @@ def _precheck(user_id: int, target_career_id: str | None) -> str | None:
     if target is not None and rs.get_career(target) is None:
         raise ApiError(404, "career_not_found", "The requested career is not in the knowledge base.")
     return target
+
+
+def _node_trace():
+    """Collect completed workflow nodes for the section-19 agent trace."""
+    nodes: list[str] = []
+
+    def observer(event: str, payload: dict) -> None:
+        if event != "node_update" or not isinstance(payload, dict):
+            return
+        node = payload.get("node")
+        if isinstance(node, str):
+            nodes.append(node)
+
+    return nodes, observer
 
 
 def _internal_error(exc: Exception) -> ApiError:
@@ -81,11 +96,18 @@ async def analyze_cv(
         metadata = extraction.metadata
         extraction = None  # drop the raw text reference
 
+        nodes_executed, observer = _node_trace()
         state = await run_in_threadpool(
             lambda: workflow.run(
                 user_id=user_id, target_career_id=target,
-                raw_profile_text=redaction.redacted_text,
+                raw_profile_text=redaction.redacted_text, observer=observer,
             )
+        )
+        # Best-effort audit log: it never changes the analysis response.
+        analysis_log_service.record_analysis(
+            state=state, workflow=workflow, user_id=user_id, source="cv_upload",
+            target_career_id=target, nodes_executed=nodes_executed,
+            document=metadata, redaction=redaction,
         )
         return finish(state, user_id=user_id, source="cv_upload",
                       document=metadata, redaction=redaction)
@@ -106,7 +128,16 @@ def analyze_existing_profile(
     """Runs the workflow over an already-persisted profile; no profile parsing."""
     try:
         target = _precheck(body.user_id, body.target_career_id)
-        state = workflow.run(user_id=body.user_id, target_career_id=target)
+        nodes_executed, observer = _node_trace()
+        state = workflow.run(
+            user_id=body.user_id, target_career_id=target, observer=observer,
+        )
+        # Best-effort audit log: it never changes the analysis response.
+        analysis_log_service.record_analysis(
+            state=state, workflow=workflow, user_id=body.user_id,
+            source="existing_profile", target_career_id=target,
+            nodes_executed=nodes_executed,
+        )
         return finish(state, user_id=body.user_id, source="existing_profile")
     except ApiError:
         raise

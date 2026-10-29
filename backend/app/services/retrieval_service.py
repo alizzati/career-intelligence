@@ -47,6 +47,11 @@ def get_all_careers() -> list[CareerOut]:
         return [CareerOut(**r) for r in career_repo.fetch_all_careers(conn)]
 
 
+def list_all_careers() -> list[dict]:
+    with engine.connect() as conn:
+        return career_repo.fetch_all_careers(conn)
+
+
 def get_career(career_id: str) -> CareerOut | None:
     with engine.connect() as conn:
         row = career_repo.fetch_career(conn, career_id)

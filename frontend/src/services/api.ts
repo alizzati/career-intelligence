@@ -28,7 +28,11 @@ const json = (data: unknown): RequestInit => ({
 export const health = () => request<{ status: "ok" }>("/health");
 // Requires the POST /analysis/users addition (backend/app/api/routes/users.py).
 export const createUser = (email: string, full_name: string) =>
-  request<{ user_id: number }>("/analysis/users", json({ email, full_name }));
+  request<{ user_id: number; email?: string; full_name?: string }>("/analysis/users", json({ email, full_name }));
+
+export const getUserByEmail = (email: string) =>
+  request<{ user_id: number; email: string; full_name?: string }>(`/analysis/users?email=${encodeURIComponent(email)}`);
+
 /** HTTP 200 with verified=false is a normal resolved value; callers must inspect final_status. */
 export const analyzeProfile = (user_id: number, target_career_id?: string) =>
   request<AnalysisResponse>("/analysis/profile", json({ user_id, ...(target_career_id ? { target_career_id } : {}) }));
@@ -39,3 +43,6 @@ export function analyzeCv(user_id: number, file: File, target_career_id?: string
   if (target_career_id) form.append("target_career_id", target_career_id);
   return request<AnalysisResponse>("/analysis/cv", { method: "POST", body: form });
 }
+
+export const listCareers = () =>
+  request<Array<{ career_id: string; canonical_name: string; domain?: string }>>("/careers");

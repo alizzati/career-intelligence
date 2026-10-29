@@ -101,3 +101,11 @@ def get_user_full_profile(user_id: int) -> UserFullProfileOut | None:
         certifications=certifications, skills=skills,
         preferences=UserPreferencesOut(**prefs_row) if prefs_row else None,
     )
+
+
+def get_user_by_email(email: str):
+    with engine.connect() as conn:
+        user_row = repo.fetch_user_by_email(conn, email)
+        if user_row is None:
+            return None
+        return UserOut(**user_row)

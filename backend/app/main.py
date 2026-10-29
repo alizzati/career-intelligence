@@ -6,7 +6,7 @@ from app.api.boundary import (
     BodySizeLimitMiddleware, LocalDevelopmentBoundaryMiddleware, request_limit_for,
 )
 from app.api.errors import install_error_handlers
-from app.api.routes import analysis, health, users
+from app.api.routes import analysis, careers, health, users
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(analysis.router)
     app.include_router(users.router)
+    app.include_router(careers.router)
     logger.warning("Career Intelligence API is a development prototype without authentication.")
     return app
 

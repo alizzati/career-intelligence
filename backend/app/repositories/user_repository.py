@@ -58,6 +58,14 @@ def fetch_user(conn: Connection, user_id: int) -> dict | None:
     return dict(row) if row else None
 
 
+def fetch_user_by_email(conn: Connection, email: str) -> dict | None:
+    row = conn.execute(
+        text("SELECT user_id, email, full_name, created_at FROM users WHERE email = :email"),
+        {"email": email},
+    ).mappings().first()
+    return dict(row) if row else None
+
+
 def fetch_profile(conn: Connection, user_id: int) -> dict | None:
     row = conn.execute(
         text("SELECT headline, summary, target_domain FROM user_profiles WHERE user_id = :uid"),

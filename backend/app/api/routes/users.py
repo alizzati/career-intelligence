@@ -5,7 +5,7 @@ loopback-only) applies unchanged. Returns only user_id: no email or name is echo
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from pydantic import BaseModel, StringConstraints
 from sqlalchemy.exc import IntegrityError
 
@@ -28,6 +28,14 @@ class UserCreateRequest(BaseModel):
 
 class UserCreateResponse(BaseModel):
     user_id: int
+    email: str | None = None
+    full_name: str | None = None
+
+
+class UserLookupResponse(BaseModel):
+    user_id: int
+    email: str
+    full_name: str | None = None
 
 
 @router.post("", response_model=UserCreateResponse, status_code=201)
@@ -39,4 +47,15 @@ def create_user(body: UserCreateRequest) -> UserCreateResponse:
         raise ApiError(409, "user_exists", "A user with this email already exists.") from None
     except Exception as exc:
         raise _internal_error(exc) from None
-    return UserCreateResponse(user_id=user.user_id)
+    return UserCreateResponse(user_id=user.user_id, email=user.email, full_name=user.full_name)
+
+
+@router.get("", response_model=UserLookupResponse)
+def get_user_by_email_query(email: str = Query(...)):
+    try:
+        user = us.get_user_by_email(email)
+    except Exception as exc:
+        raise _internal_error(exc) from None
+    if user is None:
+        raise ApiError(404, "user_not_found", "No user found with this email.")
+    return UserLookupResponse(user_id=user.user_id, email=user.email, full_name=user.full_name)

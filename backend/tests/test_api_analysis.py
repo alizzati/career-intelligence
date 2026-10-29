@@ -138,9 +138,10 @@ def upload(client, content, filename, user_id="17", **data):
 
 
 @pytest.fixture(autouse=True)
-def local_dev_access(monkeypatch):
+def local_dev_access(monkeypatch, tmp_path):
     monkeypatch.setenv("CAREER_API_ACKNOWLEDGE_NO_AUTH", "true")
     monkeypatch.setenv("CAREER_API_ALLOW_REMOTE_CLIENTS", "true")
+    monkeypatch.setenv("CAREER_ANALYSIS_LOG_DIR", str(tmp_path / "analysis_logs"))
 
 @pytest.fixture(autouse=True)
 def isolated_lookups():

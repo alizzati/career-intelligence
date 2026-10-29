@@ -27,6 +27,9 @@ Hybrid Verified Multi-Agent Career Intelligence System for IT Graduates.
 Step 16: Inspection, career-fit verification, artifact contract, and guarded
 isolated-database validation (see its record below).
 
+* Step 16 (`MASTER_SPEC` §19): privacy-safe per-analysis logging for both normal
+  analysis endpoints (see its record below).
+
 Steps 5–11 regression tests were run locally during Step 12 implementation and passed.
 Step 12 deterministic checks and mocked semantic-review tests passed; a local-KB
 integration smoke run returned PASS for 41 checks without a live LLM call.
@@ -761,6 +764,90 @@ KB import, live LLM call, or rerun was made; the artifact was validated with
   HEAD; it is optional and not needed for functional or contract acceptance.
 
 Do not mark pending work complete without inspecting the code and running the relevant tests.
+
+## Step 16 MASTER_SPEC §19 Analysis Logging Record (2026-10-29)
+
+### Existing implementation and gap found
+
+The existing Step 16 inspection harness (`app/inspection/recorder.py` and
+`scripts/manual_validation.py`) writes a manual-validation artifact, but it is
+explicitly not used by normal API runs. Neither `/analysis/cv` nor
+`/analysis/profile` wrote a `MASTER_SPEC` §19 record. No analysis-log table or
+migration infrastructure exists, so this stage uses privacy-safe file
+persistence instead of an unapproved schema change.
+
+### Implemented behavior
+
+* Both normal analysis endpoints write exactly one JSON record after the
+  workflow returns, including workflow `ERROR` outcomes. Requests rejected
+  before the workflow (validation, 404, unsupported/oversized upload, LLM
+  unavailable) do not create an analysis log.
+* Each record contains every §19 field: `analysis_id`, `timestamp`,
+  `user_profile_id`, `model`, `model_version`, `prompt_version_identifier`,
+  `kb_version`, `agents_executed`, `agent_outputs`, `verification_result`,
+  `revision_count`, and `final_result`.
+* `agents_executed` comes from the workflow node observer and counts revision
+  attempts. The existing-profile path reuses persisted data, so the Profile
+  Agent is correctly recorded as not executed there.
+* `agent_outputs` stores the sanitized final structured outputs. The Profile
+  Agent output is reduced to persistence counts and claim hashes; extracted
+  profile fields and raw CV text are never stored.
+* `workflow_trace.nodes` records the observed node order (including revision
+  loops), so the trace, revision count, verification status, and final status
+  can be cross-checked.
+* `model_version` and `kb_version` are explicitly recorded as unavailable rather
+  than invented. Prompt identifiers are SHA-256 hashes of the existing system
+  prompt constants for the agents that executed.
+* Records default to `backend/artifacts/analysis_logs/<analysis_id>.json`
+  (`backend/artifacts` is already git-ignored) and can be redirected with
+  `CAREER_ANALYSIS_LOG_DIR`. Writes are atomic.
+* All strings pass the existing best-effort PII/secret redactor and length cap;
+  workflow exception messages are omitted entirely. A logging failure is
+  reported as a type-only warning and cannot change the analysis response.
+
+### Files created or modified
+
+* Created `backend/app/services/analysis_log_service.py`.
+* Modified `backend/app/api/routes/analysis.py`.
+* Modified `backend/tests/test_api_analysis.py` and
+  `backend/tests/test_api_runtime_integration.py` to isolate logs in `tmp_path`.
+* Created `backend/tests/test_analysis_logging.py`.
+* Modified `backend/.env.example` to document `CAREER_ANALYSIS_LOG_DIR`.
+* No database, schema, migration, Knowledge Base, or API response-contract
+  changes were made.
+
+### Tests executed (actual results)
+
+* From `backend`:
+  `.\.venv\Scripts\python.exe -m pytest tests\test_analysis_logging.py -q`
+  → **7 passed, 1 warning**.
+* Focused regressions:
+  `.\.venv\Scripts\python.exe -m pytest tests\test_api_analysis.py tests\test_career_workflow_unit.py tests\test_artifact_contract.py tests\test_inspection_core.py tests\test_inspection_integration.py tests\test_inspection_profile_views.py tests\test_inspection_serialization.py tests\test_manual_validation_workflow.py tests\test_api_boundary.py -q`
+  → **151 passed, 1 warning**.
+* Full offline suite:
+  `.\.venv\Scripts\python.exe -m pytest -q`
+  → **279 passed, 9 skipped, 1 failed, 1 warning**. The single failure is
+  `tests/test_api_users.py::test_creates_user_and_returns_only_user_id`, caused
+  by pre-existing uncommitted work in `backend/app/api/routes/users.py` that now
+  reads `user.email`/`user.full_name` while that test still mocks only
+  `user_id`. This task did not modify that route or test.
+* The default `backend/artifacts/analysis_logs` directory was not created by
+  the test runs; isolation worked.
+* Database-backed runtime tests were not run because
+  `CAREER_RUN_RUNTIME_DB_TESTS=1` was not set. No live/paid LLM call was made.
+
+### Remaining limitations
+
+* `model_version` is unavailable because the active `GeminiClient` exposes only
+  the model identifier. `kb_version` is unavailable because the Knowledge Base
+  has no exposed version identifier.
+* The file log is the current persistence layer; it does not add the
+  `analysis_id`/logging tables mentioned in `MASTER_SPEC` §22/§23.
+* The full-suite failure above is unrelated to this task but remains in the
+  working tree until the frontend/user API work is completed.
+
+**Status: COMPLETE for `MASTER_SPEC` §19 normal-API logging.** No further Step
+16 logging work is required; Step 17 has not started.
 
 ## Update Rule
 
