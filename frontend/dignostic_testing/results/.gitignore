@@ -1,0 +1,4 @@
+# CV-derived diagnostic artifacts must never be committed.
+# The folder itself is kept so the runner has a stable default output location.
+*
+!.gitignore

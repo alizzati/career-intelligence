@@ -1,6 +1,6 @@
 # Reproducibility Specification
 
-Status: Step 17 design, no model-backed execution.
+Status: Step 17 design; metric layer implemented, no model-backed execution.
 
 ## 1. Goal
 

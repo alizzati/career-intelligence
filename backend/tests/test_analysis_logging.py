@@ -87,9 +87,11 @@ def test_cv_analysis_writes_all_section_19_fields(tmp_path):
     assert isinstance(record["model"], str) and record["model"]
     assert record["model_version"].startswith("unavailable")
     assert record["kb_version"].startswith("unavailable")
-    assert record["prompt_version_identifier"]["prompts"]["profile_extraction"]["sha256"] == (
-        hashlib.sha256(EXTRACTION_SYSTEM_PROMPT.encode("utf-8")).hexdigest()
-    )
+    prompt = record["prompt_version_identifier"]["prompts"]["profile_extraction"]
+    expected_hash = hashlib.sha256(EXTRACTION_SYSTEM_PROMPT.encode("utf-8")).hexdigest()
+    assert prompt["sha256"] == expected_hash
+    assert prompt["version"] == f"sha256:{expected_hash}"
+    assert record["prompt_version_identifier"]["catalog_version"]
     assert {item["agent"] for item in record["agents_executed"]} == {
         "profile", "career_recommendation", "skill_gap", "roadmap", "verification",
     }
@@ -100,6 +102,8 @@ def test_cv_analysis_writes_all_section_19_fields(tmp_path):
     assert record["final_result"]["final_status"] == "VERIFIED"
     assert record["final_result"]["verified"] is True
     assert record["final_result"]["target_career_id"] == "C01"
+    assert record["final_result"]["revision_limit"] == 2
+    assert record["final_result"]["revision_target"] is None
     assert record["final_result"]["errors"] == []
     assert record["workflow_trace"]["nodes"][:5] == [
         "profile_analysis", "career_recommendation", "skill_gap_analysis",
@@ -147,6 +151,61 @@ def test_revision_count_and_trace_match_the_final_verification(tmp_path):
     assert record["verification_result"]["status"] == "PASS"
     assert record["final_result"]["final_status"] == "VERIFIED"
     assert record["final_result"]["verified"] is True
+    assert record["final_result"]["revision_limit"] == 2
+    assert record["final_result"]["revision_target"] is None
+
+
+def test_model_identity_is_recorded_when_the_client_exposes_it(tmp_path):
+    class ModelClient:
+        model = "synthetic-model-7"
+        model_version = "2026-10"
+
+        def complete_json(self, system, user, max_tokens=2000):
+            raise AssertionError("model client must not be called by a fake agent")
+
+    class ModelRecommendationAgent(FakeRecAgent):
+        def __init__(self):
+            super().__init__()
+            self.llm_client = ModelClient()
+
+    workflow, _ = make_workflow(career_recommendation_agent=ModelRecommendationAgent())
+    client, _ = make_client(workflow)
+    assert client.post("/analysis/profile", json={"user_id": 17}).status_code == 200
+
+    record = only_record(tmp_path)
+    assert record["model"] == "synthetic-model-7"
+    assert record["model_version"] == "2026-10"
+    assert record["model_details"]["provider"] == "ModelClient"
+    assert record["model_details"]["sdk_version"] == "not applicable"
+
+
+def test_failed_verification_outcomes_are_logged_consistently(tmp_path):
+    verifier = FakeVerifier([failing("evidence.provenance_references")])
+    client, _ = make_client(make_workflow(verification_agent=verifier)[0])
+    assert upload(client, TXT, "cv.txt").status_code == 200
+
+    record = only_record(tmp_path)
+    assert record["verification_result"]["status"] == "FAIL"
+    assert record["agent_outputs"]["verification"]["status"] == "FAIL"
+    assert record["revision_count"] == 0
+    assert record["final_result"]["final_status"] == "VERIFICATION_FAILED"
+    assert record["final_result"]["verified"] is False
+    assert record["final_result"]["revision_target"] is None
+
+
+def test_revision_limit_is_logged_consistently(tmp_path):
+    verifier = FakeVerifier([failing("roadmap.gap_coverage")])
+    workflow, _ = make_workflow(verification_agent=verifier, max_revisions=0)
+    client, _ = make_client(workflow)
+    assert client.post("/analysis/profile", json={"user_id": 17}).status_code == 200
+
+    record = only_record(tmp_path)
+    assert record["verification_result"]["status"] == "FAIL"
+    assert record["revision_count"] == 0
+    assert record["final_result"]["final_status"] == "REVISION_LIMIT_REACHED"
+    assert record["final_result"]["verified"] is False
+    assert record["final_result"]["revision_limit"] == 0
+    assert record["final_result"]["revision_target"] == "roadmap"
 
 
 def test_failed_analysis_is_logged_without_exception_messages(tmp_path):
@@ -241,6 +300,46 @@ def test_log_contains_no_sensitive_cv_or_agent_text(tmp_path):
     assert "SQL" in persisted
 
 
+def test_existing_profile_log_redacts_persisted_claim_pii(tmp_path):
+    email = "synthetic.profile@example.test"
+    phone = "0812-5555-0199"
+
+    base = make_gap()
+    claimed = SkillGapItem(
+        skill_id="S001", canonical_name="SQL", status="matched_claimed_only",
+        evidence_class="CORE", kb_confidence="high", weight=1.0, contribution=0.0,
+        matched_user_claim=MatchedUserClaim(
+            claimed_skill=email, proficiency=phone, evidence_status="none", evidence_count=0,
+        ),
+    )
+    unmatched = UnmatchedUserClaim(
+        user_skill_id=88, claimed_skill=email, proficiency=phone,
+        evidence_status="none", evidence_count=0,
+    )
+    analysis = SkillGapAnalysisOut(
+        skill_gap=base.model_copy(update={
+            "matched_claimed_only": [claimed],
+            "missing": [],
+            "unmatched_user_claims": [unmatched],
+        }),
+        narrative=SkillGapNarrative(
+            summary=f"Claim: {email}, proficiency {phone}.",
+            conclusion=f"Contact {email} at {phone}.",
+        ),
+        narrative_source="fallback-template",
+    )
+    workflow, _ = make_workflow(skill_gap_agent=FakeGapAgent(analysis))
+    client, _ = make_client(workflow)
+    assert client.post("/analysis/profile", json={"user_id": 17}).status_code == 200
+
+    persisted = json.dumps(only_record(tmp_path), ensure_ascii=False)
+    for value in (email, phone):
+        assert value not in persisted
+    assert "[REDACTED_EMAIL]" in persisted
+    assert "[REDACTED_PHONE]" in persisted
+    assert "SQL" in persisted
+
+
 def test_logging_failure_does_not_change_the_analysis_response(tmp_path, caplog):
     client, _ = make_client(make_workflow()[0])
     control = upload(client, TXT, "cv.txt")
@@ -258,6 +357,25 @@ def test_logging_failure_does_not_change_the_analysis_response(tmp_path, caplog)
     assert "Analysis log was not written (OSError)" in caplog.text
     assert "sensitive disk detail" not in caplog.text
     assert len(records(tmp_path)) == 1      # only the control run was written
+
+
+def test_profile_logging_failure_does_not_change_the_analysis_response(tmp_path, caplog):
+    client, _ = make_client(make_workflow()[0])
+    control = client.post("/analysis/profile", json={"user_id": 17})
+    assert control.status_code == 200
+
+    caplog.set_level(logging.WARNING)
+    with mock.patch.object(
+        analysis_log_service, "_atomic_write",
+        side_effect=PermissionError("private directory detail"),
+    ):
+        response = client.post("/analysis/profile", json={"user_id": 17})
+
+    assert response.status_code == 200
+    assert response.json() == control.json()
+    assert "Analysis log was not written (PermissionError)" in caplog.text
+    assert "private directory detail" not in caplog.text
+    assert len(records(tmp_path)) == 1
 
 
 def test_one_log_per_analysis_and_no_log_for_rejected_requests(tmp_path):

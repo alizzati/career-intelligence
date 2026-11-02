@@ -7,9 +7,10 @@ The canonical Step 17 documentation now lives in:
 - `DATASET_AND_ANNOTATION.md`
 - `EXPERIMENT_SPEC.md`
 - `REPRODUCIBILITY_SPEC.md`
+- `METRICS_IMPLEMENTATION.md`
 - `DECISIONS.md`
 
-This file remains as an earlier draft and should be read as a historical working note rather than as the final source of truth.
+This file remains as an earlier draft and should be read as a historical working note rather than as the final source of truth. Its `[CODE-READ]` tag below described the design-only stage; Step 17 now also has an executable, tested metric layer in `backend/app/evaluation/` (see `METRICS_IMPLEMENTATION.md`).
 
 Evidence tags used in all five files:
 

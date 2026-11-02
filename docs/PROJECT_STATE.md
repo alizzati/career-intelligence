@@ -29,6 +29,13 @@ isolated-database validation (see its record below).
 
 * Step 16 (`MASTER_SPEC` §19): privacy-safe per-analysis logging for both normal
   analysis endpoints (see its record below).
+* Step 17: executable evaluation metric framework, reference-label input
+  contracts, Step 16 adapters, machine-readable reports, and focused tests (see
+  its record below). No experiment was executed.
+* Diagnostic CV testing workflow (tooling only, not a numbered development
+  stage and not an experiment): real-pipeline per-CV traces, CSV manifest, run
+  manifest, and privacy safeguards (see its record below). No live LLM run has
+  been executed.
 
 Steps 5–11 regression tests were run locally during Step 12 implementation and passed.
 Step 12 deterministic checks and mocked semantic-review tests passed; a local-KB
@@ -37,30 +44,53 @@ Step 13's focused tests and local workflow integration run passed.
 
 ## Current Checkpoint
 
-As of 2026-10-27, Steps 1–16 are complete. The HEAD commit is `1921d30`
-("update project state"); the Step 16 code, tests, and documentation were
-committed in `ebf83fd` and `1921d30`. The guarded manual-validation run produced
-`619d709...` after the X2 fix with 11/11 cross-stage checks PASS, H1–H9 PASS,
-and zero contract violations. Step 17 has not started.
+As of 2026-10-30, Steps 1–16 are complete and the Step 17 metric layer is
+implemented in the working tree. HEAD is `7020a9f` ("fix and add"); the Step 16
+§19 per-analysis logging service and its tests are committed there. The
+2026-10-29 logging hardening changes and the new Step 17 evaluation package
+remain uncommitted at the time of this record. The guarded manual-validation
+artifact `619d709...` (2026-10-27) remains separate evidence for the
+inspection/validation work; it is not a substitute for the normal-API analysis
+logs.
 
-Verified during this reconciliation:
+Verified during this reconciliation (2026-10-29):
 
-* Frontend: `npm run typecheck` passed; `npm test` passed with **2 files, 10
-  tests** (see the Step 15 record).
-* Step 16 focused offline suites after the preflight fixes: **126 passed, 1
-  warning**; the same files gave 117 passed before those tests were added (see
-  the Step 16 record).
-* `python -m py_compile` on the changed inspection/runner/test files passed;
-  `git diff --check` passed (one pre-existing LF/CRLF notice for
-  `backend/scripts/import_kb.py`).
-* The post-fix manual-validation artifact `619d709...` (2026-10-27) records
-  11/11 cross-stage PASS (including X2) and H1–H9 PASS, and passes
-  `scripts/check_artifact.py` with zero violations. See the final acceptance
-  audit in the Step 16 record.
+* Step 16 §19 focused suite: `tests/test_analysis_logging.py` → **12 passed, 1
+  warning**.
+* Focused logging/API/workflow/artifact regression set (10 files) → **163
+  passed, 1 warning**.
+* Database-backed runtime integration tests against local `career_intelligence`
+  (FakeLLM, synthetic users, no live model): selected profile/CV/verification
+  logging tests → **3 passed**; the full file → **8 passed, 1 failed**. The
+  single failure is the pre-existing user-creation contract mismatch
+  (`/analysis/users` now returns `user_id`, `email`, and `full_name`), unrelated
+  to Step 16 logging.
+* Full offline suite (`python -m pytest -q`, runtime DB tests not enabled) →
+  **284 passed, 9 skipped, 1 failed, 1 warning**. The failure is the same
+  unrelated user-creation contract test.
+* `python -m py_compile` on the changed logging/test files passed; `git diff
+  --check` reported only LF/CRLF conversion warnings.
+* The default `backend/artifacts/analysis_logs` directory was not created by the
+  focused tests; `tmp_path` isolation worked.
+* No live/paid LLM call was made. `model_version` and `kb_version` remain
+  explicitly unavailable because the active client and Knowledge Base expose no
+  separate version identifier.
 
-The database-backed runtime tests and live LLM behavior were not run during
-this reconciliation. Earlier results for those remain prior evidence, not
-freshly verified facts.
+Step 17 verification (2026-10-30):
+
+* Evaluation focused suite
+  (`tests/test_evaluation_metrics.py` + `tests/test_evaluation_framework.py`) →
+  **66 passed**.
+* `py_compile` on all six evaluation modules → **OK**.
+* Full offline suite (`python -m pytest -q`) → **350 passed, 9 skipped, 1
+  failed, 1 warning** in 14.65 s; the failure is the same pre-existing
+  user-creation contract test, unrelated to Step 17.
+* No live/paid LLM call, database mutation, or formal experiment was performed.
+
+Earlier 2026-10-27 reconciliation evidence (not re-executed on 2026-10-29):
+frontend `npm run typecheck` passed and `npm test` passed with 2 files / 10
+tests; the Step 16 manual-validation artifact `619d709...` has 11/11
+cross-stage PASS (including X2), H1–H9 PASS, and zero contract violations.
 
 ## Local Full-Stack Runtime Check (2026-10-18)
 
@@ -140,7 +170,9 @@ freshly verified facts.
 1. Step 16 is complete; no further E2E run is required. Optional only if the
    researcher rejects the recorded dirty-tree overlay: one guarded rerun from a
    literally clean HEAD (the overlay was non-code task notes, not system code).
-2. Implement the Step 17 evaluation framework (not started).
+2. Step 17 metric layer is implemented; reference labels and the Step 18 runner
+   remain pending. No effectiveness evaluation can be reported until annotated
+   data and executed runs exist.
 3. Implement and evaluate Step 18 baseline and ablation configurations.
 4. Step 19 full test matrix and Step 20 end-to-end experiments remain pending.
 5. Review live LLM-backed analysis only when explicitly approved; current
@@ -846,8 +878,341 @@ persistence instead of an unapproved schema change.
 * The full-suite failure above is unrelated to this task but remains in the
   working tree until the frontend/user API work is completed.
 
+### Re-verification and hardening (2026-10-29)
+
+* Re-audited the existing implementation before changing it. The
+  `analysis_log_service` was already wired into both normal endpoints by
+  `7020a9f`; no duplicate logging path or parallel artifact writer was added.
+  The manual-validation recorder remains separate and is not treated as the
+  normal-API log.
+* Added explicit prompt-version strings (`version: "sha256:<digest>"`) and a
+  `catalog_version` to `prompt_version_identifier`, so the required prompt
+  version is readable without persisting prompt text.
+* Added `final_result.revision_limit` and `final_result.revision_target` so the
+  recorded revision count can be interpreted against the effective workflow cap
+  and responsible stage.
+* Expanded coverage in `backend/tests/test_analysis_logging.py` for model/model
+  version availability, explicit revision-limit and verification-failure
+  outcomes, persisted-profile PII redaction, and logging-failure behavior on the
+  `/analysis/profile` endpoint.
+* Extended the opt-in database-backed runtime tests to assert that both normal
+  endpoints write §19 records, that the records carry the real synthetic user
+  ID/source/agent set, and that synthetic PII does not appear in them.
+* Files changed on 2026-10-29:
+  `backend/app/services/analysis_log_service.py`,
+  `backend/tests/test_analysis_logging.py`, and
+  `backend/tests/test_api_runtime_integration.py`, plus this state record.
+* Exact results are recorded in the Current Checkpoint above. No database
+  schema, Knowledge Base data, agent contract, LLM client, or API response
+  contract was changed. The unrelated `/analysis/users` contract test remains
+  failing; it was not modified because it is outside Step 16.
+
 **Status: COMPLETE for `MASTER_SPEC` §19 normal-API logging.** No further Step
-16 logging work is required; Step 17 has not started.
+16 logging work is required. Step 17 metric implementation is recorded below.
+
+## Step 17 Evaluation Framework Record (2026-10-30)
+
+### Existing implementation and gap found
+
+The repository already contained a documented evaluation design
+(`docs/evaluation/EVALUATION_PROTOCOL.md`, `EXPERIMENT_SPEC.md`,
+`DATASET_AND_ANNOTATION.md`, `REPRODUCIBILITY_SPEC.md`, `DECISIONS.md`), but no
+executable metric calculation, no reference-label input contract, no report
+serialization, and no evaluation tests. Step 16 supplies privacy-safe
+`analysis_log/1.0` file records, not database tables; those records do not
+contain the experimental configuration or runtime latency/token counts.
+
+### Implemented behavior
+
+* Added `backend/app/evaluation/schemas.py`: strict Pydantic contracts for
+  predictions, references, metric values, per-profile results, and reports.
+  Duplicate IDs, negative relevance, mismatched profile IDs, fault IDs outside
+  the audited pool, and inconsistent metric status/value pairs are rejected.
+* Added `backend/app/evaluation/metrics.py`: deterministic formulas for Hit@1,
+  Hit@3, nDCG@3, MRR, macro/per-class skill-gap classification, gap-set
+  precision/recall/F1, over-credit rate, unmatched-claim set recall,
+  verification recall/precision/false-positive rate, traceability levels L1-L3,
+  roadmap coverage/grounding/consistency, tie-at-cutoff, top-k overlap, and
+  pairwise stability. Empty denominators return `None` rather than a fabricated
+  zero.
+* Added `backend/app/evaluation/evaluator.py`: per-case evaluation,
+  profile-first aggregation, report-level repeated-run stability, explicit
+  coverage (`n`, `skipped`), and JSON-serializable `evaluation/1.0` reports.
+  Empty batches and mixed configurations are rejected.
+* Added `backend/app/evaluation/adapters.py`: read-only projections from Step
+  16 `analysis_log/1.0` records and real agent output objects. The configuration
+  must be supplied explicitly; unavailable runtime metrics stay unset.
+* Added `backend/app/evaluation/configurations.py`: exactly B0, B2, B3, and F,
+  with descriptive flags and manifest-ID validation only. No runtime switching
+  or ablation execution was added.
+* Preserved the four skill-gap categories. `unmatched_user_claims` remains a
+  claim-level set and is never converted into a required-skill status.
+* No agent, deterministic engine, Knowledge Base, API contract, LLM client,
+  workflow, frontend, or Step 16 logging semantic was changed.
+
+### Files created or modified
+
+Created:
+
+* `backend/app/evaluation/__init__.py`
+* `backend/app/evaluation/schemas.py`
+* `backend/app/evaluation/metrics.py`
+* `backend/app/evaluation/evaluator.py`
+* `backend/app/evaluation/adapters.py`
+* `backend/app/evaluation/configurations.py`
+* `backend/tests/test_evaluation_metrics.py`
+* `backend/tests/test_evaluation_framework.py`
+* `docs/evaluation/METRICS_IMPLEMENTATION.md`
+
+Modified documentation:
+
+* `docs/evaluation/EVALUATION_PROTOCOL.md` - step boundary and metric
+  implementation note; research design unchanged.
+* `docs/evaluation/EXPERIMENT_SPEC.md` - execution boundary now separates the
+  Step 17 metric layer from the Step 18 runner.
+* `docs/evaluation/DATASET_AND_ANNOTATION.md` - implemented contract status.
+* `docs/evaluation/DECISIONS.md` - completion checklist and Step 16 log
+  limitation recorded.
+* `docs/evaluation/REPRODUCIBILITY_SPEC.md` - status wording only.
+* `docs/evaluation/evaluation.md` - archived-draft pointer updated; content
+  retained as historical context.
+* `docs/PROJECT_STATE.md` - this record and checkpoint update.
+
+### Tests executed (actual results)
+
+From `backend/`:
+
+```text
+.\.venv\Scripts\python.exe -m pytest tests\test_evaluation_metrics.py tests\test_evaluation_framework.py -q
+```
+
+Result: **66 passed**.
+
+```text
+.\.venv\Scripts\python.exe -m py_compile app\evaluation\schemas.py app\evaluation\configurations.py app\evaluation\metrics.py app\evaluation\evaluator.py app\evaluation\adapters.py app\evaluation\__init__.py
+```
+
+Result: **py_compile OK**.
+
+```text
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+Result: **350 passed, 9 skipped, 1 failed, 1 warning** in 14.65 s. The single
+failure is the pre-existing unrelated
+`tests/test_api_users.py::test_creates_user_and_returns_only_user_id`
+(`UserCreateResponse` reads `email`/`full_name` while the test's
+`SimpleNamespace` supplies only `user_id`). It is outside Step 17 and was not
+modified.
+
+### Remaining limitations
+
+* No validated reference corpus or annotation exists in the repository, so no
+  label-dependent metric has been computed on real data and no effectiveness
+  claim is made.
+* Step 18 must provide the runner, configuration switching, manifests, repeated
+  runs, and runtime latency/token/API-call metadata.
+* The verification claim-key convention (`component::claim`) and the roadmap
+  `knowledge_base_basis` string check are harness-level conventions.
+* E8 weight sensitivity and E9 KB validity audit remain specified but not
+  implemented as Step 17 metrics.
+
+### Status
+
+**COMPLETE for the Step 17 evaluation framework (metric implementation).** Every
+metric, input contract, evaluation unit, missing-value policy, output format,
+and test requirement identified for Step 17 is implemented and test-backed.
+Steps 18-20 were not implemented. Experimental execution and scientific results
+remain pending.
+
+## Diagnostic CV Testing Workflow Record (2026-10-31)
+
+### Existing implementation and gap found
+
+The repository had a guarded manual-validation runner
+(`backend/scripts/manual_validation.py`) that produces one inspection artifact
+for a synthetic profile, plus the Step 16 `analysis_log/1.0` writer. Neither
+runs the real `/analysis/cv` endpoint over a folder of real CV PDFs, and neither
+records per-CV intermediate stage payloads. There was no repeatable way to see
+which stage (extraction, profile, retrieval, fit, gap, roadmap, verification)
+produced a given result. The 7 source PDFs under
+`frontend/dignostic_testing/input_cvs/` had no diagnostic harness.
+
+### Implemented behavior
+
+* `backend/scripts/diagnostic_cv_runner.py` is the CLI. It runs each selected CV
+  through a FastAPI `TestClient` `POST /analysis/cv`, using the real route,
+  `CareerWorkflow`, five agents, `compute_career_fit()`, skill-gap engine,
+  retrieval services, and Step 16 log writer.
+* Only `get_workflow` is overridden: with an instrumented instance of the same
+  `CareerWorkflow`, whose agents are `AgentProxy` wrappers and whose LLM client
+  is a `RecordingLLMClient`. Arguments and returned objects are forwarded
+  unchanged.
+* Outputs per run: `run.json` (`diagnostic_manifest/1.0`), `manifest.csv` (one
+  fixed-schema row per CV), `summary.md`, `traces/<cv_id>.trace.json`
+  (`diagnostic_trace/1.0`), `analysis_logs/<cv_id>.analysis_log.json` (the
+  unchanged Step 16 schema), and `errors/` only on failure.
+* The trace covers extraction, profile/normalisation, the agents' own OKB
+  reads, career fit and every observed `compute_career_fit()` call, the four
+  frozen skill-gap categories, roadmap, verification/revisions, and final
+  status. It records LLM call metadata, agent attempts, node events, and
+  read-only consistency observations.
+* Safety: live calls require `--approve-live-llm`; `--fake-llm` is a labelled
+  plumbing double; the isolated-database gate and synthetic-user cleanup are
+  reused from `scripts/manual_validation.py` without duplication; an existing
+  run directory is never overwritten.
+* Privacy: content-derived `cvNN_<sha8>` ids, neutral upload names, no raw CV
+  text, no prompt/response text, no original file name, no evidence URLs (only
+  presence), sanitised structured profile text, type-only errors, and
+  repo-relative artifact paths. `frontend/dignostic_testing/results/.gitignore`
+  ignores everything except itself.
+* `run.json`, `manifest.csv`, and `summary.md` are rewritten after each CV so a
+  partial or interrupted run is still usable. `PASS` means the run produced at
+  least one row and no CV lacked an HTTP response; an unreadable CV (`422`) is
+  recorded as failed without failing the whole run.
+* No agent, workflow, schema, Knowledge Base, scoring weight, prompt, LLM
+  client, API contract, or Step 16 logging semantic was changed.
+
+### Files created or modified
+
+Created:
+
+* `backend/app/diagnostics/__init__.py`
+* `backend/app/diagnostics/trace.py`
+* `backend/app/diagnostics/runner.py`
+* `backend/scripts/diagnostic_cv_runner.py`
+* `backend/tests/test_diagnostic_trace.py`
+* `backend/tests/test_diagnostic_runner.py`
+* `frontend/dignostic_testing/results/.gitignore`
+* `docs/DIAGNOSTIC_CV_TESTING.md`
+
+Modified:
+
+* `docs/PROJECT_STATE.md` (this record and the completed-steps list).
+
+### Tests executed (actual results)
+
+From `backend/`:
+
+```text
+python -m pytest tests/test_diagnostic_runner.py -q
+```
+
+Result: **15 passed, 6 warnings** in 7.09 s.
+
+```text
+python -m pytest tests/test_diagnostic_trace.py tests/test_analysis_logging.py tests/test_manual_validation_gate.py tests/test_inspection_integration.py -q
+```
+
+Result: **47 passed, 17 warnings** in 36.59 s.
+
+```text
+python -m pytest -q
+```
+
+Result: **381 passed, 9 skipped, 1 failed, 112 warnings** in 24.24 s. The single
+failure is the pre-existing unrelated
+`tests/test_api_users.py::test_creates_user_and_returns_only_user_id`
+(`UserCreateResponse` reads `email`/`full_name` while the test supplies only
+`user_id`). It is outside this work and was not modified.
+
+```text
+python -m scripts.diagnostic_cv_runner --dry-run
+```
+
+Result: exit 0; resolved 7 PDFs, a timestamped run directory under
+`frontend/dignostic_testing/results/`, and `llm_mode: unset`. No directory, log,
+database connection, or LLM call was made.
+
+The runner tests use the real app, route, workflow, agents, recorder, trace
+builder, and artifact writers, with an in-memory user/KB store, an injected
+database seam, a scripted LLM, and `tmp_path`. They do not establish real-model
+quality or real-database behavior.
+
+### Remaining limitations
+
+* No live/paid LLM call and no diagnostic run over the real PDFs had been
+  executed as of this implementation record. All results above are offline. The
+  first live run is recorded in the next subsection.
+* Token counts, cost, separate `model_version`, KB version, and sampling
+  parameters are unavailable from the current interfaces and are recorded as
+  unavailable.
+* The extractor is not separately timed; only total request duration is
+  recorded. Stage `started_at` is unavailable from the observer.
+* The isolated database's schema and 10-career readiness are not checked by this
+  runner; verify that separately before a live run.
+* Trace payloads retain sanitised structured profile content by design and
+  remain sensitive local data; the PII redactor is best-effort.
+* A crash between synthetic-user creation and cleanup can leave one user row.
+* These artifacts are diagnostic only and must not be reported as B0/B2/B3/F or
+  any formal experimental result.
+
+### Next planned stage
+
+Run the guarded live-LLM diagnostic pass over the 7 PDFs only after explicit
+approval, the isolated database is prepared, and `CAREER_DB_NAME` is pointed at
+it. That run is not implemented automatically by this change. Formal Steps 18-20
+remain unstarted.
+
+## First Live Diagnostic Run (2026-10-31)
+
+Pre-flight verification (read-only) confirmed: 6 of 7 PDFs extract normally;
+`H-Software_Engineer-2.pdf` is a scanned PDF without a text layer and is
+rejected by the production extractor with `scanned_pdf_unsupported`. The
+isolated database `career_intelligence_e2e_test` has the full schema, 10
+careers, 87 skills, 155 career-skill links, and empty user tables. Provider is
+`GeminiClient` with `CAREER_LLM_MODEL=gemini-3.5-flash-lite`.
+
+Executed with explicit approval, excluding the scanned PDF:
+
+```text
+$env:CAREER_DB_NAME = "career_intelligence_e2e_test"
+python -m scripts.diagnostic_cv_runner --run-id diag-20261031-live-run1 \
+  --cv <6 readable PDFs> --approve-live-llm
+```
+
+Run directory: `frontend/dignostic_testing/results/diag-20261031-live-run1/`
+(Git-ignored). Result: `PASS` by the runner's definition, counts total 6,
+completed 2, failed 4, errored 0; all synthetic users were deleted and the
+isolated database's user tables remain empty.
+
+| cv_id | HTTP | final_status | top1 | gap E/C/M/U |
+| --- | --- | --- | --- | --- |
+| `cv01_c10c07dd` | 200 | VERIFIED | C02 (0.0393) | 0/1/13/30 |
+| `cv02_8c22ecdc` | 200 | VERIFICATION_FAILED | C01 (0.0000) | 0/0/15/10 |
+| `cv03_dab6e927` | 503 | ERROR | - | - |
+| `cv04_58b407e9` | 503 | ERROR | - | - |
+| `cv05_78b2b7a5` | 503 | ERROR | - | - |
+| `cv06_02a46880` | 503 | ERROR | - | - |
+
+Observed findings:
+
+* **Provider rate limit.** `cv01` used its full 14 requests successfully; `cv02`
+  succeeded on 2 of 14 and then received HTTP 429, mapped to
+  `LLMQuotaExceededError`; `cv03`-`cv06` failed on their first request. A single
+  probe call minutes later succeeded, so the limit is per-minute, not a daily
+  cap. The LLM client has no retry or backoff, so back-to-back CVs exhaust it.
+* **`cv02` is not a genuine verification failure.** Its only non-PASS check is
+  `semantic.occupational_claims` with reason "Semantic review failed ...
+  LLMQuotaExceededError", which the agent correctly reports as `REVISE` rather
+  than a pass.
+* **Skill normalization coverage is very low.** `cv01` extracted 31 claims, 1
+  matched (`Software Architecture`); `cv02` extracted 10, 0 matched. All
+  `candidate_skill_id` values returned by the model were `null`. Career-fit
+  scores are therefore near zero and career separation collapses (0.0393 vs
+  0.0367). The KB is an abstract competency taxonomy (e.g. `Programming`,
+  `Database Management`) with no tool-level entries such as `SQL` or `Java`.
+* **Verification prompt size.** The semantic-verification prompt was ~280k
+  characters per CV, the largest single cost driver in the 14-call profile.
+
+The manifest now records `input.selection_restricted` and
+`input.selected_cv_ids` instead of the raw `--cv` values, so original file names
+cannot enter an artifact even when a run selects CVs by name. Artifact scan
+found no original file name; `tests/test_diagnostic_runner.py` and
+`tests/test_diagnostic_trace.py`: **31 passed**.
+
+Remaining 4 CVs are unprocessed and require either paced execution or a higher
+provider quota. No model, provider, or LLM client change was made.
 
 ## Update Rule
 

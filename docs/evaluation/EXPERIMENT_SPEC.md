@@ -1,6 +1,6 @@
 # Experimental Specification
 
-Status: Step 17 design, not executed.
+Status: Step 17 experiment design; metric layer implemented, no experiment executed.
 
 ## 1. Experiment objective
 
@@ -34,10 +34,16 @@ B2 must include the KB occupational relationships while leaving matching/scoring
 
 Required behavior:
 
-- prompt includes relevant KB skill names and the canonical 10-career space
-- needed relationship data is passed in a structured form, not hidden in a free-form explanation
+- prompt includes all 10 canonical careers and each career's complete
+  Career–Skill relationship set from the OKB
+- complete relationship sets are passed in a structured form, not hidden in a
+  free-form explanation
 - the LLM decides career ranking and gap status itself
 - no `compute_career_fit()` call, no `skill_gap_service` call
+
+The earlier “relevant KB skill names” / “needed relationship data” wording is
+superseded by this all-10 complete-set requirement. The prior OP-04 wording is
+preserved in the decision change record in `DECISIONS.md`.
 
 ### B3 configuration
 
@@ -166,4 +172,9 @@ The Step 18 implementation must ensure:
 
 ## 5. No-execution rule for Step 17
 
-This specification intentionally does not execute the formal runs. The design is complete enough to guide Step 18 implementation, but no pilot or formal experiments are conducted in this step.
+This specification intentionally does not execute the formal runs. Step 17
+provides the executable metric/input layer described in
+`METRICS_IMPLEMENTATION.md`; Step 18 owns the runner, configuration switching,
+manifests, repeated-run schedule, and artifact persistence. No pilot or formal
+experiment is conducted in Step 17, and no result from this step may be reported
+as an experimental finding.

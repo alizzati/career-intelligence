@@ -1,6 +1,9 @@
 # Evaluation Protocol (Step 17)
 
-Status: Step 17 design document, read-only, no experiment execution.
+Status: Step 17 protocol. The metric layer is implemented in
+`backend/app/evaluation/`; no experiment, pilot, or live model run has been
+executed. See `METRICS_IMPLEMENTATION.md` for the executable contracts and
+formulas.
 
 ## 1. Research source and scope
 
@@ -25,6 +28,7 @@ The following are taken from the actual repository implementation and are theref
 - `backend/app/agents/verification_agent.py` checks canonical IDs, deterministic score consistency, skill-gap categories, roadmap coverage, and grounding against returning KB context. It reports findings only and does not replace structured outputs.
 - `backend/app/workflows/career_workflow.py` is the orchestration layer and uses the existing agent interfaces. A revision loop is capped by `max_revisions` and reruns the owning stage when a verifier finding identifies the owner.
 - `backend/app/agents/llm_client.py` uses the Google GenAI client and reads the model from `CAREER_LLM_MODEL` or defaults to `gemini-3.8-flash`; temperature/seed are not explicitly pinned in the code and must therefore be treated as SDK defaults unless Step 18 adds explicit configuration.
+- `backend/app/evaluation/` is the Step 17 metric layer. It consumes predictions and independently supplied references; it does not run the workflow or change any agent output.
 
 ## 3. Derived evaluation questions and evidence mapping
 
@@ -121,7 +125,7 @@ Metrics are selected to support the three core outcomes and the verification/tra
 ### Primary metrics
 
 - Career ranking: Hit@1, Hit@3, nDCG@3.
-- Skill-gap classification: macro-F1 on the four status categories, with a documented reference policy and a provision for missing-OKB cases.
+- Skill-gap classification: macro-F1 on the three required-skill statuses, with the fourth canonical category (`unmatched_user_claims`) measured as a claim-level set, a documented reference policy, and a provision for missing-OKB cases.
 - Verification performance: unsupported-claim detection rate and false-positive rate under controlled fault injection.
 - Traceability: percentage of recommendation and gap items with a resolvable KB or user-evidence lineage.
 
@@ -135,16 +139,23 @@ Metrics are selected to support the three core outcomes and the verification/tra
 
 The KB is not treated as an unquestioned gold standard. Skill-gap and recommendation correctness are only interpretable after the knowledge-base validity check (E9) is performed and reported.
 
+### Implementation note
+
+The executable definitions for every metric named above, including empty-denominator and missing-label behaviour, are in `METRICS_IMPLEMENTATION.md`. Metric code lives in `backend/app/evaluation/metrics.py`; per-case orchestration lives in `backend/app/evaluation/evaluator.py`. This selects no additional metric: it operationalizes exactly the primary and secondary metrics already listed here.
+
 ## 7. Step boundaries and no-implementation rule
 
-This task completes the design and documentation stage only.
+Step 17 implements the protocol, dataset/annotation contracts, the four
+configuration definitions, and the executable metric layer. It does not run the
+experiments.
 
-- Step 17: finalize evaluation protocol, dataset and annotation rules, experimental design, reproducibility requirements, and Gate A decisions.
-- Step 18: implement the experimental infrastructure, configuration paths, manifests, and reproducible runner code.
+- Step 17: finalize evaluation protocol, dataset and annotation rules, experimental design, reproducibility requirements, Gate A decisions, and the tested metric/input contracts.
+- Step 18: implement the experimental infrastructure, configuration paths, manifests, and reproducible runner code, including repeated-run scheduling.
 - Step 19: validate the infrastructure with automated checks.
 - Step 20: run pilot and formal experiments under the approved protocol.
 
-This document does not implement Step 18 and does not run formal experiments.
+Step 17 does not implement Step 18 and does not run formal experiments. The
+metric layer can evaluate a case only when a runner or test supplies that case.
 
 ## 8. Completion status for Step 17
 
@@ -155,5 +166,7 @@ Step 17 is complete only when:
 3. Comparison validity and the boundaries of causal claims are made explicit.
 4. The Gate A decisions are recorded and the blocking/approval states are documented.
 5. The repository paths and file set are consistent with the actual implementation.
+6. Every metric listed in section 6 has an executable calculation, an input contract, an evaluation unit, missing-label handling, and a machine-readable output format.
+7. Metric calculations are unit-tested, including empty denominators, malformed labels, failed outputs, and configuration validation.
 
 No live/paid LLM calls, formal experiments, or database-mutating run configuration are performed in this step.

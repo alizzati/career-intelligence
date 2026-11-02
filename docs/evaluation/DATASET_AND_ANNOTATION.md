@@ -1,6 +1,8 @@
 # Dataset and Annotation Specification
 
-Status: Step 17 design, no experimental execution.
+Status: Step 17 dataset/annotation design. The corresponding machine-readable
+contracts are implemented in `backend/app/evaluation/schemas.py`; no annotated
+corpus has been collected, so no label-dependent metric has been computed.
 
 ## 1. Data categories
 

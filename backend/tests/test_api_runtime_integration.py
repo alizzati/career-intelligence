@@ -1,5 +1,6 @@
 """Opt-in runtime/API integration tests against a local PostgreSQL database."""
 import copy
+import json
 import logging
 import os
 import uuid
@@ -119,6 +120,18 @@ def local_api_access(monkeypatch, tmp_path):
     monkeypatch.setenv("CAREER_API_ACKNOWLEDGE_NO_AUTH", "true")
     monkeypatch.setenv("CAREER_API_ALLOW_REMOTE_CLIENTS", "true")
     monkeypatch.setenv("CAREER_ANALYSIS_LOG_DIR", str(tmp_path / "analysis_logs"))
+
+
+@pytest.fixture()
+def analysis_log_dir(tmp_path):
+    return tmp_path / "analysis_logs"
+
+
+def analysis_log_records(directory):
+    return [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted(directory.glob("*.json"))
+    ]
 
 
 def extraction_payload(test_user: SyntheticUser, description: str, proficiency: str = "intermediate"):
@@ -254,7 +267,7 @@ def _pass_api_user_profile(test_user: SyntheticUser):
 
 
 def test_existing_profile_runs_real_database_workflow_and_redacts_persisted_claims(
-    test_user, caplog,
+    test_user, caplog, analysis_log_dir,
 ):
     _pass_api_user_profile(test_user)
     llm = FakeLLM()
@@ -276,6 +289,21 @@ def test_existing_profile_runs_real_database_workflow_and_redacts_persisted_clai
     assert "[REDACTED_EMAIL]" in all_prompts
     assert "[REDACTED_PHONE]" in all_prompts
     assert test_user.skill_name in response.text
+
+    logs = analysis_log_records(analysis_log_dir)
+    assert len(logs) == 1
+    log = logs[0]
+    assert log["source"] == "existing_profile"
+    assert log["user_profile_id"] == test_user.user_id
+    assert log["model"].startswith("unavailable")
+    assert log["model_version"].startswith("unavailable")
+    assert log["kb_version"].startswith("unavailable")
+    assert {item["agent"] for item in log["agents_executed"]} == {
+        "career_recommendation", "skill_gap", "roadmap", "verification",
+    }
+    assert log["verification_result"]["status"] == "PASS"
+    assert log["final_result"]["final_status"] == "VERIFIED"
+    _assert_no_test_pii(json.dumps(log, ensure_ascii=False))
 
 
 def test_health_endpoint_is_available_from_the_application(local_database):
@@ -317,7 +345,7 @@ def test_user_creation_endpoint_persists_synthetic_user_and_returns_only_id(loca
 
 
 def test_cv_upload_runs_real_database_workflow_and_repeat_is_idempotent(
-    test_user, caplog,
+    test_user, caplog, analysis_log_dir,
 ):
     llm = FakeLLM(extractions=[
         extraction_payload(test_user, "Original synthetic description"),
@@ -359,6 +387,16 @@ def test_cv_upload_runs_real_database_workflow_and_repeat_is_idempotent(
     _assert_no_test_pii(caplog.text)
     assert "[REDACTED_EMAIL]" in all_prompts
     assert "[REDACTED_PHONE]" in all_prompts
+
+    logs = analysis_log_records(analysis_log_dir)
+    assert len(logs) == 2
+    for log in logs:
+        assert log["source"] == "cv_upload"
+        assert log["user_profile_id"] == test_user.user_id
+        assert "profile" in {item["agent"] for item in log["agents_executed"]}
+        assert log["agent_outputs"]["profile"]["executed"] is True
+        assert log["final_result"]["final_status"] == "VERIFIED"
+        _assert_no_test_pii(json.dumps(log, ensure_ascii=False))
 
 
 def test_missing_user_and_career_are_rejected_against_local_database(test_user):
@@ -427,7 +465,9 @@ def test_malformed_and_oversized_uploads_are_rejected_before_llm(test_user):
     assert llm.prompts == []
 
 
-def test_verification_failure_and_revision_exhaustion_are_not_success(test_user):
+def test_verification_failure_and_revision_exhaustion_are_not_success(
+    test_user, analysis_log_dir,
+):
     _pass_api_user_profile(test_user)
     failure = VerificationResult(
         status="FAIL",
@@ -465,6 +505,15 @@ def test_verification_failure_and_revision_exhaustion_are_not_success(test_user)
     assert failed.json()["final_status"] == "VERIFICATION_FAILED"
     assert exhausted.status_code == 200 and exhausted.json()["verified"] is False
     assert exhausted.json()["final_status"] == "REVISION_LIMIT_REACHED"
+
+    logs = analysis_log_records(analysis_log_dir)
+    assert len(logs) == 2
+    by_status = {log["final_result"]["final_status"]: log for log in logs}
+    assert by_status["VERIFICATION_FAILED"]["verification_result"]["status"] == "FAIL"
+    assert by_status["VERIFICATION_FAILED"]["final_result"]["verified"] is False
+    assert by_status["REVISION_LIMIT_REACHED"]["verification_result"]["status"] == "FAIL"
+    assert by_status["REVISION_LIMIT_REACHED"]["final_result"]["revision_limit"] == 0
+    assert by_status["REVISION_LIMIT_REACHED"]["final_result"]["revision_target"] == "roadmap"
 
 
 @pytest.mark.parametrize(

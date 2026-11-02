@@ -36,6 +36,7 @@ from app.services.profile_privacy_service import (
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = "analysis_log/1.0"
+PROMPT_CATALOG_VERSION = "1.0"
 STR_LIMIT = 2000
 KB_VERSION = "unavailable (Knowledge Base exposes no version identifier)"
 MODEL_VERSION_UNAVAILABLE = (
@@ -190,13 +191,21 @@ def _model_metadata(workflow: Any) -> dict:
 
 def _prompt_identifiers(agents: list[dict]) -> dict:
     executed = {item["agent"] for item in agents}
-    prompts = {
-        prompt_id: {"agent": agent, "sha256": sha256_text(prompt)}
-        for prompt_id, (agent, prompt) in _PROMPT_CATALOG.items()
-        if agent in executed
-    }
+    prompts: dict[str, dict] = {}
+    for prompt_id, (agent, prompt) in _PROMPT_CATALOG.items():
+        if agent not in executed:
+            continue
+        digest = sha256_text(prompt)
+        prompts[prompt_id] = {
+            "agent": agent,
+            # An explicit version string keeps the record readable without
+            # persisting prompt text; the digest is the version identity.
+            "version": f"sha256:{digest}",
+            "sha256": digest,
+        }
     return {
         "catalog": "career-intelligence/system-prompts",
+        "catalog_version": PROMPT_CATALOG_VERSION,
         "hash_algorithm": "sha256",
         "prompts": prompts,
     }
@@ -328,6 +337,12 @@ def build_analysis_record(
 
     final_status = state.get("final_status")
     target = state.get("target_career_id", target_career_id)
+    max_revisions = getattr(workflow, "max_revisions", None)
+    revision_limit = (
+        max_revisions
+        if isinstance(max_revisions, int) and not isinstance(max_revisions, bool)
+        else None
+    )
     record = {
         "schema_version": SCHEMA_VERSION,
         "analysis_id": uuid.uuid4().hex,
@@ -359,6 +374,11 @@ def build_analysis_record(
             "last_stage": (
                 clean_str(state.get("stage"), 80)
                 if isinstance(state.get("stage"), str) else "unavailable"
+            ),
+            "revision_limit": revision_limit,
+            "revision_target": (
+                clean_str(state.get("revision_target"), 80)
+                if isinstance(state.get("revision_target"), str) else None
             ),
             "errors": _safe_errors(state.get("errors")),
         },
