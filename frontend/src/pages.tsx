@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CATEGORY, Section, StatusBanner, Tag, Unavailable, pct, Card } from "./components";
+import { CATEGORY, Card, Icon, MetaRow, ProgressRing, Section, StatCard, StatusBanner, Tag, Unavailable, pct } from "./components";
 import type { AnalysisResponse, SkillGapItem, SkillRef } from "./types/api";
 
 export interface HomeProps {
@@ -68,89 +68,99 @@ export function Home(p: HomeProps) {
 
   return (
     <>
-      <div className="card" style={{ background: 'linear-gradient(135deg, var(--bg-elevated) 0%, var(--bg-subtle) 100%)' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '1rem' }}>
-          <div style={{ fontSize: '2rem', flexShrink: 0 }}>🎯</div>
-          <div>
-            <h2 style={{ margin: '0 0 0.5rem 0', fontSize: '1.5rem', fontWeight: 700 }}>Welcome to Career Intelligence</h2>
-            <p style={{ margin: '0 0 0.75rem 0', color: 'var(--fg-muted)', lineHeight: 1.7 }}>
-              Discover your ideal IT career path with AI-powered analysis. Get personalized recommendations, 
-              identify skill gaps, and receive a tailored learning roadmap based on Indonesian occupational standards.
-            </p>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem', color: 'var(--fg-subtle)' }}>
-              <span>⚠️</span>
-              <span>Research prototype - Results are held in browser memory only and are lost on reload</span>
-            </div>
+      <section className="hero">
+        <div>
+          <span className="eyebrow"><Icon name="sparkles" /> AI career guidance</span>
+          <h2>Welcome to Career Intelligence</h2>
+          <p>
+            Discover your ideal IT career path with AI-powered analysis. Get personalized recommendations,
+            identify skill gaps, and receive a tailored learning roadmap based on Indonesian occupational standards.
+          </p>
+          <div className="hero-note">
+            <Icon name="info" />
+            <span>Research prototype — results are held in browser memory only and are lost on reload</span>
           </div>
         </div>
-      </div>
+        <div className="hero-badge" aria-hidden="true">
+          <Icon name="target" />
+        </div>
+      </section>
 
-      <Card title="System Status" subtitle="Check backend connectivity">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+      <Card title="System status" subtitle="Check backend connectivity">
+        <div className="status-line">
           <button className="btn-primary" onClick={p.onHealth}>
-            Check Backend
+            <Icon name="activity" /> Check backend
           </button>
           {p.healthText && (
-            <span role="status" style={{ 
-              display: 'flex', 
-              alignItems: 'center', 
-              gap: '0.5rem',
-              color: p.healthText.includes('reachable') ? 'var(--ok)' : 'var(--bad)',
-              fontWeight: 500
-            }}>
-              {p.healthText.includes('reachable') ? '✓' : '✗'} {p.healthText}
+            <span role="status" className={`health-pill ${p.healthText.includes('reachable') ? "ok" : "bad"}`}>
+              <Icon name={p.healthText.includes('reachable') ? "check" : "close"} /> {p.healthText}
             </span>
           )}
         </div>
       </Card>
 
-      <Section title="Step 1: User Setup">
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem' }}>
-          <Card title="Create New Account" subtitle="Primary workflow">
-            <div style={{ display: 'grid', gap: '0.75rem' }}>
+      <Section title="Step 1 · User setup">
+        <div className="split-grid">
+          <Card title="Create new account" subtitle="Primary workflow">
+            <div className="form-grid">
               <label>
-                Email Address
-                <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="your.email@example.com" style={{ borderColor: createError && createError.includes('email') ? 'var(--bad)' : undefined }} />
+                Email address
+                <input
+                  type="email"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  placeholder="your.email@example.com"
+                  className={createError && createError.includes('email') ? "input-error" : undefined}
+                />
               </label>
               {createError && createError.toLowerCase().includes('email') && (
-                <div style={{ color: 'var(--bad)', fontSize: '0.8125rem', marginTop: '-0.25rem' }}>{createError}</div>
+                <div className="field-error">{createError}</div>
               )}
               <label>
-                Full Name
+                Full name
                 <input value={name} onChange={e => setName(e.target.value)} placeholder="Enter your full name" />
               </label>
               <button className="btn-primary" disabled={creating || p.busy || !email || !name} onClick={handleCreate}>
-                {creating ? 'Creating...' : 'Create Account'}
+                {creating ? 'Creating...' : 'Create account'}
               </button>
-              {createSuccess && <div style={{ color: 'var(--ok)', fontSize: '0.875rem' }}>✓ {createSuccess}</div>}
-              {createError && !createError.toLowerCase().includes('email') && <div style={{ color: 'var(--bad)', fontSize: '0.875rem' }}>{createError}</div>}
+              {createSuccess && <div className="field-success">✓ {createSuccess}</div>}
+              {createError && !createError.toLowerCase().includes('email') && <div className="field-error">{createError}</div>}
             </div>
           </Card>
 
-          <Card title="Use Existing Account" subtitle="Secondary workflow">
-            <div style={{ display: 'grid', gap: '0.75rem' }}>
+          <Card title="Use existing account" subtitle="Secondary workflow">
+            <div className="form-grid">
               <label>
-                Email Address
-                <input type="email" value={existingEmail} onChange={e => setExistingEmail(e.target.value)} placeholder="your.email@example.com" />
+                Email address
+                <input
+                  type="email"
+                  value={existingEmail}
+                  onChange={e => setExistingEmail(e.target.value)}
+                  placeholder="your.email@example.com"
+                />
               </label>
               <button disabled={selecting || p.busy || !existingEmail} onClick={handleSelectExisting}>
                 {selecting ? 'Looking up...' : 'Continue with this account'}
               </button>
-              {existingSuccess && <div style={{ color: 'var(--ok)', fontSize: '0.875rem' }}>✓ {existingSuccess}</div>}
-              {existingError && <div style={{ color: 'var(--bad)', fontSize: '0.875rem' }}>{existingError}</div>}
-              <div style={{ padding: '0.75rem', background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)', fontSize: '0.875rem' }}>
-                <strong>Active User:</strong> {p.userId ? <span style={{ color: 'var(--primary)', fontWeight: 600 }}>#{p.userId}</span> : <span className="muted">None selected</span>}
+              {existingSuccess && <div className="field-success">✓ {existingSuccess}</div>}
+              {existingError && <div className="field-error">{existingError}</div>}
+              <div className="callout">
+                <Icon name="user" />
+                <div>
+                  <strong>Active user:</strong>{" "}
+                  {p.userId ? <span className="chip primary">#{p.userId}</span> : <span className="muted">None selected</span>}
+                </div>
               </div>
             </div>
           </Card>
         </div>
       </Section>
 
-      <Section title="Step 2: Run Career Analysis">
-        <Card title="Analyze Your Profile" subtitle={p.userId === null ? "Please select or create a user first" : "Choose your analysis method"}>
-          <div style={{ display: 'grid', gap: '1.5rem' }}>
-            <label style={{ maxWidth: '400px' }}>
-              Target Career (Optional)
+      <Section title="Step 2 · Run career analysis">
+        <Card title="Analyze your profile" subtitle={p.userId === null ? "Please select or create a user first" : "Choose your analysis method"}>
+          <div className="form-stack">
+            <label className="field">
+              Target career (optional)
               <select value={target} onChange={e => setTarget(e.target.value)}>
                 <option value="">Choose a target career (optional)</option>
                 {p.careersLoading && <option value="" disabled>Loading careers...</option>}
@@ -159,68 +169,64 @@ export function Home(p: HomeProps) {
                   <option key={c.career_id} value={c.career_id}>{c.canonical_name}</option>
                 ))}
               </select>
-              <span style={{ fontSize: '0.75rem', color: 'var(--fg-muted)', fontWeight: 400 }}>
-                Leave blank to get automatic recommendations
-              </span>
+              <span>Leave blank to get automatic recommendations</span>
             </label>
-            
-            <div>
-              <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '0.9rem', fontWeight: 600 }}>Option A: Analyze Stored Profile</h4>
-              <p style={{ margin: '0 0 0.75rem 0', fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
-                Use previously stored profile data for analysis
-              </p>
-              <button className="btn-primary" disabled={p.busy || p.userId === null} onClick={() => p.onProfile(t)}>
-                {p.busy ? 'Analyzing...' : 'Analyze Stored Profile'}
-              </button>
-            </div>
-            
-            <hr />
-            
-            <div>
-              <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '0.9rem', fontWeight: 600 }}>Option B: Upload CV</h4>
-              <p style={{ margin: '0 0 0.75rem 0', fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
-                Upload your CV/resume for automatic profile extraction
-              </p>
-              <div style={{ display: 'grid', gap: '0.75rem', maxWidth: '400px' }}>
-                <label>
-                  CV File
-                  <input type="file" accept=".pdf,.docx,.txt" onChange={e => setFile(e.target.files?.[0] ?? null)} />
-                  <span style={{ fontSize: '0.75rem', color: 'var(--fg-muted)', fontWeight: 400 }}>
-                    Supported formats: PDF, DOCX, TXT
-                  </span>
-                </label>
-                {file && (
-                  <div style={{ padding: '0.5rem 0.75rem', background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)', fontSize: '0.875rem' }}>
-                    📄 Selected: <strong>{file.name}</strong> ({(file.size / 1024).toFixed(1)} KB)
-                  </div>
-                )}
-                <button className="btn-primary" disabled={p.busy || p.userId === null || !file} onClick={() => file && p.onCv(file, t)}>
-                  {p.busy ? 'Analyzing...' : 'Upload CV & Analyze'}
+
+            <div className="option-block">
+              <div className="option-heading">
+                <span className="option-index">A</span>
+                <div>
+                  <h4>Analyze stored profile</h4>
+                  <p>Use previously stored profile data for analysis.</p>
+                </div>
+              </div>
+              <div>
+                <button className="btn-primary" disabled={p.busy || p.userId === null} onClick={() => p.onProfile(t)}>
+                  <Icon name="activity" /> {p.busy ? 'Analyzing...' : 'Analyze stored profile'}
                 </button>
               </div>
             </div>
-          </div>
-          
-          {p.busy && (
-            <div style={{ 
-              marginTop: '1.5rem', 
-              padding: '1rem', 
-              background: 'var(--info-bg)', 
-              border: '1px solid var(--info-border)',
-              borderRadius: 'var(--radius-md)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.75rem'
-            }}>
-              <div style={{ fontSize: '1.25rem' }}>⏳</div>
-              <div>
-                <strong style={{ color: 'var(--info)' }}>Analysis in Progress</strong>
-                <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
-                  This may take a while as multiple AI agents process your profile...
-                </p>
+
+            <div className="option-divider" />
+
+            <div className="option-block">
+              <div className="option-heading">
+                <span className="option-index">B</span>
+                <div>
+                  <h4>Upload CV</h4>
+                  <p>Upload your CV/resume for automatic profile extraction.</p>
+                </div>
+              </div>
+              <div className="form-grid">
+                <label className="field">
+                  CV file
+                  <input type="file" accept=".pdf,.docx,.txt" onChange={e => setFile(e.target.files?.[0] ?? null)} />
+                  <span>Supported formats: PDF, DOCX, TXT</span>
+                </label>
+                {file && (
+                  <div className="file-chip">
+                    <Icon name="file" />
+                    <span>Selected: <strong>{file.name}</strong> ({(file.size / 1024).toFixed(1)} KB)</span>
+                  </div>
+                )}
+                <div>
+                  <button className="btn-primary" disabled={p.busy || p.userId === null || !file} onClick={() => file && p.onCv(file, t)}>
+                    <Icon name="upload" /> {p.busy ? 'Analyzing...' : 'Upload CV & analyze'}
+                  </button>
+                </div>
               </div>
             </div>
-          )}
+
+            {p.busy && (
+              <div className="callout info">
+                <Icon name="clock" />
+                <div>
+                  <strong>Analysis in progress</strong>
+                  <p>This may take a while as multiple AI agents process your profile...</p>
+                </div>
+              </div>
+            )}
+          </div>
         </Card>
       </Section>
     </>
@@ -230,36 +236,27 @@ export function Home(p: HomeProps) {
 const Row = ({ i }: { i: SkillGapItem }) => (
   <tr>
     <td>
-      <div>
+      <div className="cell-stack">
         <strong>{i.canonical_name}</strong>
-        <div style={{ fontSize: '0.75rem', color: 'var(--fg-muted)', marginTop: '0.25rem' }}>{i.skill_id}</div>
+        <span className="chip">{i.skill_id}</span>
       </div>
     </td>
     <td>
-      <span style={{ 
-        padding: '0.25rem 0.5rem', 
-        background: 'var(--bg-subtle)', 
-        borderRadius: 'var(--radius-sm)',
-        fontSize: '0.75rem'
-      }}>
-        {i.evidence_class}
-      </span>
+      <span className="chip">{i.evidence_class}</span>
     </td>
     <td>
-      <span style={{ fontWeight: 500 }}>{i.kb_confidence}</span>
+      <span className="cell-value">{i.kb_confidence}</span>
     </td>
     <td>
       {i.matched_user_claim ? (
-        <div style={{ fontSize: '0.875rem' }}>
-          <div style={{ marginBottom: '0.25rem' }}>
-            <strong>"{i.matched_user_claim.claimed_skill}"</strong>
-          </div>
-          <div style={{ color: 'var(--fg-muted)' }}>
+        <div className="cell-stack">
+          <strong>"{i.matched_user_claim.claimed_skill}"</strong>
+          <span className="cell-meta">
             Proficiency: {i.matched_user_claim.proficiency ?? "not given"} • Evidence: {i.matched_user_claim.evidence_count} row(s)
-          </div>
+          </span>
         </div>
       ) : (
-        <span style={{ color: 'var(--fg-subtle)' }}>—</span>
+        <span className="muted">—</span>
       )}
     </td>
   </tr>
@@ -272,64 +269,40 @@ export function UserProfile({ r }: { r: AnalysisResponse }) {
     <>
       <Unavailable what="Stored profile (education, experience, projects, certifications)"
         why="The API has no profile-read endpoint, by design, to avoid exposing personal data without access control." />
-      
-      <Card title="Analysis Run Metadata" subtitle="Information returned by the API">
-        <div style={{ display: 'grid', gap: '0.75rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem', background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
-            <span style={{ fontWeight: 500 }}>User ID</span>
-            <span style={{ fontWeight: 600, color: 'var(--primary)' }}>#{r.user_id}</span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem', background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
-            <span style={{ fontWeight: 500 }}>Analysis Source</span>
-            <span>{r.source}</span>
-          </div>
+
+      <Card title="Analysis run metadata" subtitle="Information returned by the API">
+        <div className="meta-list">
+          <MetaRow label="User ID" value={<span className="chip primary">#{r.user_id}</span>} />
+          <MetaRow label="Analysis source" value={<span className="chip">{r.source}</span>} />
           {r.document && (
             <>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem', background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
-                <span style={{ fontWeight: 500 }}>Document Format</span>
-                <span>{r.document.format}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem', background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
-                <span style={{ fontWeight: 500 }}>File Size</span>
-                <span>{(r.document.size_bytes / 1024).toFixed(1)} KB</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem', background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
-                <span style={{ fontWeight: 500 }}>Pages</span>
-                <span>{r.document.page_count ?? "N/A"}</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem', background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
-                <span style={{ fontWeight: 500 }}>Character Count</span>
-                <span>{r.document.character_count.toLocaleString()}</span>
-              </div>
-            </>
-          )}
-          {r.redaction && (
-            <>
-              <div style={{ padding: '0.75rem', background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
-                <div style={{ fontWeight: 500, marginBottom: '0.5rem' }}>PII Redaction (Best Effort)</div>
-                <div style={{ fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
-                  {r.redaction.replacement_count} replacement(s) made
-                  {r.redaction.detected_types.length > 0 && (
-                    <div style={{ marginTop: '0.25rem' }}>
-                      Types: {r.redaction.detected_types.join(", ")}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </>
-          )}
-          {r.profile_extraction && (
-            <>
-              <div style={{ padding: '0.75rem', background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
-                <div style={{ fontWeight: 500, marginBottom: '0.5rem' }}>Profile Extraction</div>
-                <div style={{ fontSize: '0.875rem', color: 'var(--fg-muted)', display: 'grid', gap: '0.25rem' }}>
-                  <div>Skill claims processed: {r.profile_extraction.skills_persisted}</div>
-                  <div>Evidence rows processed: {r.profile_extraction.evidence_persisted}</div>
-                </div>
-              </div>
+              <MetaRow label="Document format" value={r.document.format} />
+              <MetaRow label="File size" value={`${(r.document.size_bytes / 1024).toFixed(1)} KB`} />
+              <MetaRow label="Pages" value={r.document.page_count ?? "N/A"} />
+              <MetaRow label="Character count" value={r.document.character_count.toLocaleString()} />
             </>
           )}
         </div>
+
+        {r.redaction && (
+          <div className="meta-block">
+            <h4>PII redaction (best effort)</h4>
+            <p>
+              {r.redaction.replacement_count} replacement(s) made
+              {r.redaction.detected_types.length > 0 && (
+                <span> · Types: {r.redaction.detected_types.join(", ")}</span>
+              )}
+            </p>
+          </div>
+        )}
+
+        {r.profile_extraction && (
+          <div className="meta-block">
+            <h4>Profile extraction</h4>
+            <p>Skill claims processed: {r.profile_extraction.skills_persisted}</p>
+            <p>Evidence rows processed: {r.profile_extraction.evidence_persisted}</p>
+          </div>
+        )}
       </Card>
     </>
   );
@@ -342,28 +315,32 @@ export function SkillsEvidence({ r }: { r: AnalysisResponse }) {
     ["matched_evidenced", g.matched_evidenced], ["matched_claimed_only", g.matched_claimed_only], ["missing", g.missing]];
   return (
     <>
-      <Card title="Skills Analysis" subtitle={`Relative to: ${g.canonical_name} (${g.career_id})`}>
-        <div style={{ padding: '0.75rem', background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)', fontSize: '0.875rem', lineHeight: 1.7 }}>
-          <strong>Note:</strong> Proficiency is self-reported and is never compared against requirements. 
-          Skills are categorized based on evidence in your profile.
+      <Card title="Skills analysis" subtitle={`Relative to: ${g.canonical_name} (${g.career_id})`}>
+        <div className="callout info">
+          <Icon name="info" />
+          <div>
+            <strong>How to read this</strong>
+            <p>
+              Proficiency is self-reported and is never compared against requirements.
+              Skills are categorized based on evidence in your profile.
+            </p>
+          </div>
         </div>
       </Card>
 
       {groups.map(([cat, items]) => (
         <Section key={cat} title={CATEGORY[cat].text}>
           {items.length === 0 ? (
-            <Card>
-              <p style={{ margin: 0, color: 'var(--fg-muted)', textAlign: 'center', padding: '1rem' }}>None</p>
-            </Card>
+            <p className="empty-inline">None</p>
           ) : (
             <div className="table-container">
               <table>
                 <thead>
                   <tr>
-                    <th>Required Skill</th>
-                    <th>KB Classification</th>
-                    <th>KB Confidence</th>
-                    <th>User Claim & Evidence</th>
+                    <th>Required skill</th>
+                    <th>KB classification</th>
+                    <th>KB confidence</th>
+                    <th>User claim & evidence</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -374,171 +351,138 @@ export function SkillsEvidence({ r }: { r: AnalysisResponse }) {
           )}
         </Section>
       ))}
-      
+
       <Section title={CATEGORY.unmatched.text}>
         {g.unmatched_user_claims.length === 0 ? (
-          <Card>
-            <p style={{ margin: 0, color: 'var(--fg-muted)', textAlign: 'center', padding: '1rem' }}>None</p>
-          </Card>
+          <p className="empty-inline">None</p>
         ) : (
-          <Card>
-            <p style={{ margin: '0 0 1rem 0', fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
+          <>
+            <p className="muted text-sm" style={{ marginBottom: '0.5rem' }}>
               These skills were mentioned in your profile but are not required for this career.
             </p>
-            <ul style={{ margin: 0 }}>
+            <ul className="claim-list">
               {g.unmatched_user_claims.map(u => (
                 <li key={u.user_skill_id}>
-                  <strong>"{u.claimed_skill}"</strong> 
-                  <span style={{ color: 'var(--fg-muted)' }}> (evidence rows: {u.evidence_count})</span>
-                  {u.note && <div style={{ marginTop: '0.25rem', fontSize: '0.875rem', color: 'var(--fg-muted)' }}>{u.note}</div>}
+                  <strong>"{u.claimed_skill}"</strong>
+                  <span className="muted"> (evidence rows: {u.evidence_count})</span>
+                  {u.note && <div className="cell-meta" style={{ marginTop: '0.25rem' }}>{u.note}</div>}
                 </li>
               ))}
             </ul>
-          </Card>
+          </>
         )}
       </Section>
-      
+
       <Unavailable what="Evidence details (type, description, URL)" why="The API returns only evidence counts per claim." />
     </>
   );
 }
 
+const fitTone = (score: number) => score >= 0.7 ? "emerald" : score >= 0.5 ? "amber" : "rose";
+const fitLabel = (score: number) => score >= 0.7 ? "Strong match" : score >= 0.5 ? "Moderate match" : "Developing match";
+
 export function Recommendations({ r, busy, onTarget }: { r: AnalysisResponse; busy: boolean; onTarget: (id: string) => void }) {
   if (!r.recommendations.length) return <Unavailable what="Recommendations" why="The run returned none." />;
   return (
     <>
-      <Card title="Analysis Summary" subtitle="Career recommendations ranked by fit score">
-        <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap', fontSize: '0.875rem' }}>
-          <div>
-            <span className="muted">Target Career for Gap Analysis:</span>{" "}
-            <strong style={{ color: 'var(--primary)' }}>{r.target_career_id ?? "Auto-selected (top-ranked)"}</strong>
-          </div>
-          <div>
-            <span className="muted">Total Recommendations:</span>{" "}
-            <strong>{r.recommendations.length}</strong>
-          </div>
-          <div>
-            <span className="muted">User ID:</span>{" "}
-            <strong>#{r.user_id}</strong>
-          </div>
-        </div>
-      </Card>
+      <div className="stat-grid summary-grid" style={{ marginBottom: '1.25rem' }}>
+        <StatCard
+          label="Recommendations"
+          value={r.recommendations.length}
+          hint="Ranked by deterministic fit score"
+          tone="indigo"
+          icon="layers"
+        />
+        <StatCard
+          label="Active user"
+          value={`#${r.user_id}`}
+          hint="Browser session context"
+          tone="slate"
+          icon="user"
+        />
+        <StatCard
+          label="Gap analysis target"
+          value={r.target_career_id ? "Selected" : "Auto"}
+          hint={r.target_career_id ?? "Top-ranked career selected automatically"}
+          tone="emerald"
+          icon="target"
+        />
+      </div>
 
-      {r.recommendations.map((c, n) => (
-        <article className="card" key={c.career_id} style={{ border: c.career_id === r.target_career_id ? '2px solid var(--primary)' : '1px solid var(--border)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem', flexWrap: 'wrap', gap: '0.75rem' }}>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
-                <div style={{ 
-                  width: '2rem', 
-                  height: '2rem', 
-                  borderRadius: '50%', 
-                  background: n === 0 ? 'linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%)' : 'var(--bg-subtle)',
-                  color: n === 0 ? 'white' : 'var(--fg)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontWeight: 700,
-                  fontSize: '0.875rem',
-                  flexShrink: 0
-                }}>
-                  #{n + 1}
+      <div className="career-list">
+        {r.recommendations.map((c, n) => {
+          const tone = fitTone(c.fit_score);
+          const isTarget = c.career_id === r.target_career_id;
+          return (
+            <article className={`card career-card ${isTarget ? "is-target" : ""}`} key={c.career_id}>
+              <div className="career-head">
+                <div className="career-title-group">
+                  <div className={`rank-badge ${n === 0 ? "top" : ""}`}>#{n + 1}</div>
+                  <div>
+                    <div className="career-title-line">
+                      <h3>{c.canonical_name}</h3>
+                      {isTarget && <span className="chip primary">Target</span>}
+                    </div>
+                    <div className="career-meta">
+                      <span className="chip">{c.career_id}</span>
+                      <span className="meta-text">{c.domain}</span>
+                    </div>
+                  </div>
                 </div>
-                <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 600 }}>
-                  {c.canonical_name}
-                </h3>
-                {c.career_id === r.target_career_id && (
-                  <span style={{ 
-                    padding: '0.25rem 0.5rem', 
-                    background: 'var(--primary)', 
-                    color: 'white', 
-                    borderRadius: 'var(--radius-sm)',
-                    fontSize: '0.75rem',
-                    fontWeight: 600
-                  }}>
-                    TARGET
-                  </span>
-                )}
+                <button
+                  className={isTarget ? "" : "btn-primary"}
+                  disabled={busy || isTarget}
+                  onClick={() => onTarget(c.career_id)}
+                >
+                  <Icon name={isTarget ? "check" : "refresh"} />
+                  {isTarget ? "Current target" : "Set as target & re-analyze"}
+                </button>
               </div>
-              <div style={{ display: 'flex', gap: '1rem', fontSize: '0.875rem', color: 'var(--fg-muted)', flexWrap: 'wrap' }}>
-                <span>ID: <code style={{ background: 'var(--bg-subtle)', padding: '0.125rem 0.375rem', borderRadius: 'var(--radius-sm)' }}>{c.career_id}</code></span>
-                <span>Domain: {c.domain}</span>
-              </div>
-            </div>
-            <button 
-              className={c.career_id === r.target_career_id ? "" : "btn-primary"}
-              disabled={busy || c.career_id === r.target_career_id} 
-              onClick={() => onTarget(c.career_id)}
-            >
-              {c.career_id === r.target_career_id ? "✓ Current Target" : "Set as Target & Re-analyze"}
-            </button>
-          </div>
 
-          <div style={{ marginBottom: '1.5rem' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-              <span style={{ fontWeight: 600, fontSize: '0.875rem' }}>Career Fit Score</span>
-              <span style={{ fontWeight: 700, fontSize: '1.125rem', color: c.fit_score >= 0.7 ? 'var(--ok)' : c.fit_score >= 0.5 ? 'var(--warn)' : 'var(--bad)' }}>
-                {pct(c.fit_score)}
-              </span>
-            </div>
-            <div style={{ 
-              width: '100%', 
-              height: '0.75rem', 
-              background: 'var(--bg-subtle)', 
-              borderRadius: 'var(--radius-sm)',
-              overflow: 'hidden'
-            }}>
-              <div style={{ 
-                width: `${c.fit_score * 100}%`, 
-                height: '100%', 
-                background: c.fit_score >= 0.7 ? 'linear-gradient(90deg, var(--ok) 0%, #22c55e 100%)' : 
-                           c.fit_score >= 0.5 ? 'linear-gradient(90deg, var(--warn) 0%, #fb923c 100%)' : 
-                           'linear-gradient(90deg, var(--bad) 0%, #f87171 100%)',
-                transition: 'width 0.3s ease'
-              }} />
-            </div>
-          </div>
+              <div className="fit-row">
+                <ProgressRing value={c.fit_score} label="Career fit score" />
+                <div className="fit-copy">
+                  <span className="stat-label">Career fit score</span>
+                  <span className={`fit-value ${tone}`}>{fitLabel(c.fit_score)}</span>
+                  <span className="stat-hint">Deterministic weighted match</span>
+                </div>
+              </div>
 
-          <div style={{ display: 'grid', gap: '0.75rem', marginBottom: '1rem' }}>
-            <div>
-              <div style={{ marginBottom: '0.5rem' }}>
-                <Tag cat="matched_evidenced" />
-                <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>Skills with Evidence</span>
+              <div className="skill-summary">
+                <div className="skill-line">
+                  <div className="skill-line-head">
+                    <Tag cat="matched_evidenced" />
+                    <span>Skills with evidence</span>
+                  </div>
+                  <p>{names(c.matched_skills)}</p>
+                </div>
+                <div className="skill-line">
+                  <div className="skill-line-head">
+                    <Tag cat="matched_claimed_only" />
+                    <span>Skills claimed (no direct evidence)</span>
+                  </div>
+                  <p>{names(c.claimed_only_skills)}</p>
+                </div>
+                <div className="skill-line">
+                  <div className="skill-line-head">
+                    <Tag cat="missing" />
+                    <span>Missing skills</span>
+                  </div>
+                  <p>{names(c.missing_skills_preview)}</p>
+                </div>
               </div>
-              <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--fg-muted)', lineHeight: 1.6 }}>
-                {names(c.matched_skills)}
-              </p>
-            </div>
-            <div>
-              <div style={{ marginBottom: '0.5rem' }}>
-                <Tag cat="matched_claimed_only" />
-                <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>Skills Claimed (No Direct Evidence)</span>
-              </div>
-              <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--fg-muted)', lineHeight: 1.6 }}>
-                {names(c.claimed_only_skills)}
-              </p>
-            </div>
-            <div>
-              <div style={{ marginBottom: '0.5rem' }}>
-                <Tag cat="missing" />
-                <span style={{ fontSize: '0.875rem', fontWeight: 500 }}>Missing Skills</span>
-              </div>
-              <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--fg-muted)', lineHeight: 1.6 }}>
-                {names(c.missing_skills_preview)}
-              </p>
-            </div>
-          </div>
 
-          <div style={{ padding: '1rem', background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)', borderLeft: '3px solid var(--primary)' }}>
-            <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.875rem', lineHeight: 1.7 }}>
-              {c.reasoning}
-            </p>
-            <span className="text-xs" style={{ color: 'var(--fg-subtle)' }}>
-              Reasoning source: {c.reasoning_source}
-            </span>
-          </div>
-        </article>
-      ))}
+              <div className="reasoning">
+                <div className="reasoning-head">
+                  <Icon name="sparkles" /> Why this fits
+                </div>
+                <p>{c.reasoning}</p>
+                <span className="text-xs">Reasoning source: {c.reasoning_source}</span>
+              </div>
+            </article>
+          );
+        })}
+      </div>
     </>
   );
 }
@@ -549,103 +493,109 @@ export function SkillGap({ r }: { r: AnalysisResponse }) {
   const g = a.skill_gap, n = a.narrative;
   return (
     <>
-      <Card title={`${g.canonical_name}`} subtitle={`Career ID: ${g.career_id} • Fit Score: ${pct(g.fit_score)}`}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
-          <div style={{ textAlign: 'center', padding: '1rem', background: 'var(--ok-bg)', borderRadius: 'var(--radius-md)', border: '1px solid var(--ok-border)' }}>
-            <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--ok)' }}>{g.matched_evidenced.length}</div>
-            <div style={{ fontSize: '0.875rem', color: 'var(--ok)', fontWeight: 500 }}>Evidenced</div>
-          </div>
-          <div style={{ textAlign: 'center', padding: '1rem', background: 'var(--warn-bg)', borderRadius: 'var(--radius-md)', border: '1px solid var(--warn-border)' }}>
-            <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--warn)' }}>{g.matched_claimed_only.length}</div>
-            <div style={{ fontSize: '0.875rem', color: 'var(--warn)', fontWeight: 500 }}>Claimed Only</div>
-          </div>
-          <div style={{ textAlign: 'center', padding: '1rem', background: 'var(--bad-bg)', borderRadius: 'var(--radius-md)', border: '1px solid var(--bad-border)' }}>
-            <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--bad)' }}>{g.missing.length}</div>
-            <div style={{ fontSize: '0.875rem', color: 'var(--bad)', fontWeight: 500 }}>Missing</div>
-          </div>
-          <div style={{ textAlign: 'center', padding: '1rem', background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border)' }}>
-            <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--fg-muted)' }}>{g.unmatched_user_claims.length}</div>
-            <div style={{ fontSize: '0.875rem', color: 'var(--fg-muted)', fontWeight: 500 }}>Unmatched Claims</div>
-          </div>
+      <Card title={g.canonical_name} subtitle={`Career ID: ${g.career_id} • Fit score: ${pct(g.fit_score)}`}>
+        <div className="stat-grid">
+          <StatCard
+            label="Matched · evidenced"
+            value={g.matched_evidenced.length}
+            hint="Supported by linked evidence"
+            tone="emerald"
+            icon="check"
+          />
+          <StatCard
+            label="Claimed only"
+            value={g.matched_claimed_only.length}
+            hint="No linked evidence"
+            tone="amber"
+            icon="alert"
+          />
+          <StatCard
+            label="Missing"
+            value={g.missing.length}
+            hint="Required but not in profile"
+            tone="rose"
+            icon="close"
+          />
+          <StatCard
+            label="Unmatched claims"
+            value={g.unmatched_user_claims.length}
+            hint="Not career requirements"
+            tone="slate"
+            icon="info"
+          />
         </div>
       </Card>
 
-      <Section title="Analysis Explanation">
+      <Section title="Analysis explanation">
         <Card>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
-            <span>ℹ️</span>
-            <span>Narrative source: <strong>{a.narrative_source}</strong> • The deterministic classification is authoritative</span>
+          <div className="callout info">
+            <Icon name="info" />
+            <div>
+              Narrative source: <strong>{a.narrative_source}</strong> • The deterministic classification is authoritative.
+            </div>
           </div>
-          
-          {n.summary && (
-            <div style={{ padding: '1rem', background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)', marginBottom: '1rem' }}>
-              <p style={{ margin: 0, lineHeight: 1.8 }}>{n.summary}</p>
-            </div>
-          )}
-          
+
+          {n.summary && <p className="narrative-summary">{n.summary}</p>}
+
           {n.strengths.length > 0 && (
-            <div style={{ marginBottom: '1rem' }}>
-              <h4 style={{ margin: '0 0 0.75rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--ok)' }}>
-                <span>💪</span> Strengths
-              </h4>
-              <div style={{ display: 'grid', gap: '0.5rem' }}>
+            <div className="insight-group">
+              <h4 className="insight-title ok"><Icon name="trending" /> Strengths</h4>
+              <div className="insight-list">
                 {n.strengths.map((o, i) => (
-                  <div key={i} style={{ padding: '0.75rem', background: 'var(--ok-bg)', borderLeft: '3px solid var(--ok)', borderRadius: '0 var(--radius-md) var(--radius-md) 0' }}>
-                    <p style={{ margin: 0, fontSize: '0.875rem', lineHeight: 1.7 }}>{o.text}</p>
+                  <div className="insight ok" key={i}>
+                    <p>{o.text}</p>
                   </div>
                 ))}
               </div>
             </div>
           )}
-          
+
           {[...n.claimed_only_observations, ...n.missing_skill_observations].length > 0 && (
-            <div style={{ marginBottom: '1rem' }}>
-              <h4 style={{ margin: '0 0 0.75rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--warn)' }}>
-                <span>📈</span> Areas for Development
-              </h4>
-              <div style={{ display: 'grid', gap: '0.5rem' }}>
+            <div className="insight-group">
+              <h4 className="insight-title warn"><Icon name="trending" /> Areas for development</h4>
+              <div className="insight-list">
                 {[...n.claimed_only_observations, ...n.missing_skill_observations].map((o, i) => (
-                  <div key={i} style={{ padding: '0.75rem', background: 'var(--warn-bg)', borderLeft: '3px solid var(--warn)', borderRadius: '0 var(--radius-md) var(--radius-md) 0' }}>
-                    <p style={{ margin: 0, fontSize: '0.875rem', lineHeight: 1.7 }}>{o.text}</p>
+                  <div className="insight warn" key={i}>
+                    <p>{o.text}</p>
                   </div>
                 ))}
               </div>
             </div>
           )}
-          
+
           {n.unmatched_claim_observations.length > 0 && (
-            <div style={{ marginBottom: '1rem' }}>
-              <h4 style={{ margin: '0 0 0.75rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--fg-muted)' }}>
-                <span>❓</span> Other Observations
-              </h4>
-              <div style={{ display: 'grid', gap: '0.5rem' }}>
+            <div className="insight-group">
+              <h4 className="insight-title muted"><Icon name="info" /> Other observations</h4>
+              <div className="insight-list">
                 {n.unmatched_claim_observations.map((o, i) => (
-                  <div key={`u${i}`} style={{ padding: '0.75rem', background: 'var(--bg-subtle)', borderLeft: '3px solid var(--border-strong)', borderRadius: '0 var(--radius-md) var(--radius-md) 0' }}>
-                    <p style={{ margin: 0, fontSize: '0.875rem', lineHeight: 1.7 }}>{o.text}</p>
+                  <div className="insight muted" key={`u${i}`}>
+                    <p>{o.text}</p>
                   </div>
                 ))}
               </div>
             </div>
           )}
-          
+
           {n.conclusion && (
-            <div style={{ padding: '1rem', background: 'var(--info-bg)', border: '1px solid var(--info-border)', borderRadius: 'var(--radius-md)' }}>
-              <p style={{ margin: 0, lineHeight: 1.8, fontWeight: 500 }}>{n.conclusion}</p>
+            <div className="callout info">
+              <Icon name="check" />
+              <div><strong>Conclusion</strong><p>{n.conclusion}</p></div>
             </div>
           )}
-          
+
           {a.llm_error && (
-            <div style={{ marginTop: '1rem', padding: '0.75rem', background: 'var(--warn-bg)', borderRadius: 'var(--radius-md)', fontSize: '0.875rem', color: 'var(--warn)' }}>
-              ⚠️ An LLM step failed; details omitted by the API.
+            <div className="callout warn">
+              <Icon name="alert" />
+              <div>An LLM step failed; details omitted by the API.</div>
             </div>
           )}
-          
+
           {a.validation_notes.length > 0 && (
-            <details style={{ marginTop: '1rem' }}>
-              <summary>Validation Notes ({a.validation_notes.length})</summary>
-              <ul style={{ marginTop: '0.75rem' }}>
+            <details>
+              <summary>Validation notes ({a.validation_notes.length})</summary>
+              <ul>
                 {a.validation_notes.map((x, i) => (
-                  <li key={i} style={{ fontSize: '0.875rem' }}>{x}</li>
+                  <li key={i}>{x}</li>
                 ))}
               </ul>
             </details>
@@ -653,17 +603,13 @@ export function SkillGap({ r }: { r: AnalysisResponse }) {
         </Card>
       </Section>
 
-      <Card>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <span style={{ fontSize: '1.25rem' }}>📊</span>
-          <div>
-            <strong>Detailed Breakdown Available</strong>
-            <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
-              See the "Skills & Evidence" tab for per-skill breakdown with evidence details.
-            </p>
-          </div>
+      <div className="callout">
+        <Icon name="chart" />
+        <div>
+          <strong>Detailed breakdown available</strong>
+          <p>See the “Skills & Evidence” page for a per-skill breakdown with evidence details.</p>
         </div>
-      </Card>
+      </div>
     </>
   );
 }
@@ -673,84 +619,60 @@ export function Roadmap({ r }: { r: AnalysisResponse }) {
   if (!m) return <Unavailable what="Roadmap" why="No roadmap in this run." />;
   return (
     <>
-      <Card title="Learning Roadmap Summary" subtitle={`Narrative source: ${m.narrative_source}`}>
-        <p style={{ margin: 0, lineHeight: 1.8 }}>{m.summary}</p>
+      <Card title="Learning roadmap summary" subtitle={`Narrative source: ${m.narrative_source}`}>
+        <p className="narrative-summary">{m.summary}</p>
       </Card>
 
-      <div style={{ 
-        padding: '1rem', 
-        background: 'var(--info-bg)', 
-        border: '1px solid var(--info-border)',
-        borderRadius: 'var(--radius-md)',
-        marginBottom: '1.5rem',
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: '0.75rem'
-      }}>
-        <span style={{ fontSize: '1.25rem', flexShrink: 0 }}>ℹ️</span>
-        <div style={{ fontSize: '0.875rem', lineHeight: 1.7 }}>
-          <strong>Note:</strong> Focus items follow the Knowledge Base order and are not ranked by priority. 
-          The Knowledge Base provides no courses, resources, prerequisites, or proficiency targets.
+      <div className="callout info" style={{ marginBottom: '1.5rem' }}>
+        <Icon name="info" />
+        <div>
+          <strong>Note</strong>
+          <p>
+            Focus items follow the Knowledge Base order and are not ranked by priority.
+            The Knowledge Base provides no courses, resources, prerequisites, or proficiency targets.
+          </p>
         </div>
       </div>
 
       {m.items.length === 0 ? (
         <Card>
-          <div style={{ textAlign: 'center', padding: '2rem' }}>
-            <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🎉</div>
-            <h3 style={{ margin: '0 0 0.5rem 0', color: 'var(--ok)' }}>All Skills Covered!</h3>
-            <p style={{ margin: 0, color: 'var(--fg-muted)' }}>No outstanding learning items identified.</p>
+          <div className="empty-state" style={{ border: 0, background: 'transparent', padding: '2rem' }}>
+            <div className="empty-icon"><Icon name="check" /></div>
+            <h3>All skills covered</h3>
+            <p>No outstanding learning items identified.</p>
           </div>
         </Card>
       ) : (
-        <Section title={`Learning Steps (${m.items.length} items)`}>
-          <div style={{ display: 'grid', gap: '1rem' }}>
+        <Section title={`Learning steps (${m.items.length} items)`}>
+          <div className="timeline">
             {m.items.map((i, idx) => (
-              <Card key={i.skill_id}>
-                <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
-                  <div style={{ 
-                    width: '2.5rem', 
-                    height: '2.5rem', 
-                    borderRadius: '50%', 
-                    background: 'linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%)',
-                    color: 'white',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontWeight: 700,
-                    fontSize: '0.9rem',
-                    flexShrink: 0
-                  }}>
-                    {idx + 1}
+              <article className="card roadmap-card" key={i.skill_id}>
+                <div className="roadmap-step">{idx + 1}</div>
+                <div className="roadmap-content">
+                  <div className="roadmap-head">
+                    <h3>{i.canonical_name}</h3>
+                    <span className="chip">{i.skill_id}</span>
+                    <Tag cat={i.gap_status} />
                   </div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
-                      <h3 style={{ margin: 0, fontSize: '1.125rem', fontWeight: 600 }}>{i.canonical_name}</h3>
-                      <code style={{ background: 'var(--bg-subtle)', padding: '0.125rem 0.375rem', borderRadius: 'var(--radius-sm)', fontSize: '0.75rem' }}>{i.skill_id}</code>
-                      <Tag cat={i.gap_status} />
-                    </div>
-                    
-                    <div style={{ marginBottom: '0.75rem', padding: '0.75rem', background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
-                        <span style={{ fontSize: '1rem' }}>🎯</span>
-                        <strong style={{ fontSize: '0.875rem' }}>Action Required</strong>
-                      </div>
-                      <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--fg-muted)' }}>
-                        {i.learning_action === "add_linked_evidence" 
-                          ? "Add linked evidence to demonstrate this skill" 
+
+                  <div className="action-box">
+                    <span className="action-icon"><Icon name="target" /></span>
+                    <div>
+                      <strong>Action required</strong>
+                      <p>
+                        {i.learning_action === "add_linked_evidence"
+                          ? "Add linked evidence to demonstrate this skill"
                           : "Develop and strengthen this skill"}
                       </p>
                     </div>
-                    
-                    <div style={{ fontSize: '0.875rem' }}>
-                      <strong style={{ color: 'var(--fg-muted)' }}>Knowledge Base Basis:</strong>
-                      <p style={{ margin: '0.25rem 0 0 0', color: 'var(--fg)', lineHeight: 1.7 }}>
-                        {i.knowledge_base_basis || "Evidence unavailable"}
-                      </p>
-                    </div>
+                  </div>
+
+                  <div className="kb-basis">
+                    <span className="stat-label">Knowledge base basis</span>
+                    <p>{i.knowledge_base_basis || "Evidence unavailable"}</p>
                   </div>
                 </div>
-              </Card>
+              </article>
             ))}
           </div>
         </Section>
@@ -764,88 +686,71 @@ export function Evidence({ r }: { r: AnalysisResponse }) {
   return (
     <>
       <Unavailable what="Source/provenance records (SKKNI, KBJI, O*NET, ESCO)" why="No API endpoint resolves provenance. Only the IDs below are available, unresolved." />
-      
-      <Card title="Knowledge Base References" subtitle="Sources for roadmap items">
+
+      <Card title="Knowledge base references" subtitle="Sources for roadmap items">
         {r.roadmap?.items.length ? (
-          <div style={{ display: 'grid', gap: '0.75rem' }}>
+          <div className="reference-list">
             {r.roadmap.items.map(i => (
-              <div key={i.skill_id} style={{ padding: '0.75rem', background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
-                <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>{i.canonical_name}</div>
-                <div style={{ fontSize: '0.875rem', color: 'var(--fg-muted)', lineHeight: 1.7 }}>
-                  {i.knowledge_base_basis || "Evidence unavailable"}
-                </div>
+              <div className="reference-row" key={i.skill_id}>
+                <strong>{i.canonical_name}</strong>
+                <p>{i.knowledge_base_basis || "Evidence unavailable"}</p>
               </div>
             ))}
           </div>
         ) : (
-          <p style={{ margin: 0, color: 'var(--fg-muted)', textAlign: 'center', padding: '1rem' }}>Evidence unavailable</p>
+          <p className="empty-inline">Evidence unavailable</p>
         )}
       </Card>
-      
-      <Card title="Referenced Record IDs" subtitle="From verification checks">
+
+      <Card title="Referenced record IDs" subtitle="From verification checks">
         {ids.size ? (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+          <div className="chip-row">
             {[...ids].map(id => (
-              <code key={id} style={{ 
-                padding: '0.25rem 0.5rem', 
-                background: 'var(--bg-subtle)', 
-                border: '1px solid var(--border)',
-                borderRadius: 'var(--radius-sm)',
-                fontSize: '0.8125rem'
-              }}>
-                {id}
-              </code>
+              <span className="chip" key={id}>{id}</span>
             ))}
           </div>
         ) : (
-          <p style={{ margin: 0, color: 'var(--fg-muted)', textAlign: 'center', padding: '1rem' }}>Evidence unavailable</p>
+          <p className="empty-inline">Evidence unavailable</p>
         )}
       </Card>
     </>
   );
 }
 
+const statusPill = (status: string) =>
+  status === "PASS" ? "pass" : status === "FAIL" ? "fail" : "revise";
+
 export function Details({ r }: { r: AnalysisResponse }) {
   const v = r.verification, w = r.recommendations[0]?.score_breakdown.weights_used;
   return (
     <>
       <StatusBanner status={r.final_status} revisions={r.revision_count} />
-      
-      <Card title="Analysis Overview" subtitle="Run configuration and metadata">
-        <div style={{ display: 'grid', gap: '0.75rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem', background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
-            <span style={{ fontWeight: 500 }}>Verified</span>
-            <span style={{ fontWeight: 600, color: r.verified ? 'var(--ok)' : 'var(--bad)' }}>
-              {r.verified ? '✓ Yes' : '✗ No'}
-            </span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem', background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
-            <span style={{ fontWeight: 500 }}>Target Career</span>
-            <span>{r.target_career_id ?? "Auto-selected"}</span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem', background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
-            <span style={{ fontWeight: 500 }}>Skill Gap Narrative Source</span>
-            <span>{r.skill_gap?.narrative_source ?? "N/A"}</span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem', background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
-            <span style={{ fontWeight: 500 }}>Roadmap Narrative Source</span>
-            <span>{r.roadmap?.narrative_source ?? "N/A"}</span>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.75rem', background: 'var(--bg-subtle)', borderRadius: 'var(--radius-md)' }}>
-            <span style={{ fontWeight: 500 }}>Revisions Used</span>
-            <span style={{ fontWeight: 600 }}>{r.revision_count}</span>
-          </div>
+
+      <Card title="Analysis overview" subtitle="Run configuration and metadata">
+        <div className="meta-list">
+          <MetaRow
+            label="Verified"
+            value={
+              r.verified
+                ? <span className="health-pill ok"><Icon name="check" /> Yes</span>
+                : <span className="health-pill bad"><Icon name="close" /> No</span>
+            }
+          />
+          <MetaRow label="Target career" value={r.target_career_id ?? "Auto-selected"} />
+          <MetaRow label="Skill gap narrative source" value={<span className="chip">{r.skill_gap?.narrative_source ?? "N/A"}</span>} />
+          <MetaRow label="Roadmap narrative source" value={<span className="chip">{r.roadmap?.narrative_source ?? "N/A"}</span>} />
+          <MetaRow label="Revisions used" value={<span className="chip">{r.revision_count}</span>} />
         </div>
       </Card>
-      
+
       <Unavailable what="Analysis ID / history / timestamps / model version" why="Not returned by the API; persistence and logging belong to Step 16." />
-      
+
       {w && (
-        <Card title="Scoring Weights" subtitle="Deterministic fit calculation weights">
-          <pre style={{ margin: 0 }}>{JSON.stringify(w, null, 2)}</pre>
+        <Card title="Scoring weights" subtitle="Deterministic fit calculation weights">
+          <pre>{JSON.stringify(w, null, 2)}</pre>
         </Card>
       )}
-      
+
       {!v ? (
         <Unavailable what="Verification" why="No verification result in this run." />
       ) : (
@@ -863,60 +768,61 @@ export function Details({ r }: { r: AnalysisResponse }) {
               <tbody>
                 {v.checks.map((c, i) => (
                   <tr key={i}>
-                    <td style={{ fontWeight: 500 }}>{c.check}</td>
+                    <td style={{ fontWeight: 600 }}>{c.check}</td>
                     <td>
-                      <span style={{ 
-                        padding: '0.25rem 0.5rem', 
-                        borderRadius: 'var(--radius-sm)',
-                        fontSize: '0.75rem',
-                        fontWeight: 600,
-                        background: c.status === 'PASS' ? 'var(--ok-bg)' : c.status === 'FAIL' ? 'var(--bad-bg)' : 'var(--warn-bg)',
-                        color: c.status === 'PASS' ? 'var(--ok)' : c.status === 'FAIL' ? 'var(--bad)' : 'var(--warn)',
-                        border: `1px solid ${c.status === 'PASS' ? 'var(--ok-border)' : c.status === 'FAIL' ? 'var(--bad-border)' : 'var(--warn-border)'}`
-                      }}>
-                        {c.status}
-                      </span>
+                      <span className={`status-pill ${statusPill(c.status)}`}>{c.status}</span>
                     </td>
-                    <td style={{ fontSize: '0.875rem', lineHeight: 1.6 }}>{c.reason}</td>
-                    <td style={{ fontSize: '0.8125rem' }}>
-                      {c.source_ids.length > 5 ? `${c.source_ids.length} IDs` : c.source_ids.join(", ") || "—"}
+                    <td style={{ lineHeight: 1.7 }}>{c.reason}</td>
+                    <td>
+                      {c.source_ids.length > 5
+                        ? <span className="chip">{c.source_ids.length} IDs</span>
+                        : c.source_ids.length
+                          ? (
+                            <div className="chip-row">
+                              {c.source_ids.map(id => <span className="chip" key={id}>{id}</span>)}
+                            </div>
+                          )
+                          : <span className="muted">—</span>}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          
+
           {v.unsupported_claims.length > 0 && (
             <div style={{ marginTop: '1.5rem' }}>
-              <h4 style={{ margin: '0 0 0.75rem 0', color: 'var(--bad)' }}>⚠️ Unsupported Claims</h4>
-              <div style={{ display: 'grid', gap: '0.5rem' }}>
+              <h4 className="insight-title" style={{ color: 'var(--bad)', marginBottom: '0.75rem' }}>
+                <Icon name="alert" /> Unsupported claims
+              </h4>
+              <div className="alert-list">
                 {v.unsupported_claims.map((c, i) => (
-                  <div key={i} style={{ padding: '0.75rem', background: 'var(--bad-bg)', border: '1px solid var(--bad-border)', borderRadius: 'var(--radius-md)' }}>
-                    <div style={{ fontWeight: 600, fontSize: '0.875rem', marginBottom: '0.25rem', color: 'var(--bad)' }}>
-                      [{c.component}]
-                    </div>
-                    <div style={{ fontSize: '0.875rem', lineHeight: 1.7 }}>{c.claim}</div>
+                  <div className="claim-alert" key={i}>
+                    <strong>[{c.component}]</strong>
+                    <p>{c.claim}</p>
                   </div>
                 ))}
               </div>
             </div>
           )}
-          
+
           {v.required_revision.length > 0 && (
             <div style={{ marginTop: '1.5rem' }}>
-              <h4 style={{ margin: '0 0 0.75rem 0', color: 'var(--warn)' }}>🔄 Required Revisions</h4>
-              <ul style={{ margin: 0 }}>
+              <h4 className="insight-title warn" style={{ marginBottom: '0.25rem' }}>
+                <Icon name="refresh" /> Required revisions
+              </h4>
+              <ul className="check-list">
                 {v.required_revision.map((x, i) => (
-                  <li key={i} style={{ fontSize: '0.875rem', lineHeight: 1.7 }}>{x}</li>
+                  <li key={i}>{x}</li>
                 ))}
               </ul>
             </div>
           )}
-          
+
           {v.llm_error && (
-            <div style={{ marginTop: '1rem', padding: '0.75rem', background: 'var(--warn-bg)', borderRadius: 'var(--radius-md)', fontSize: '0.875rem', color: 'var(--warn)' }}>
-              ⚠️ A semantic-review LLM step failed; details omitted by the API.
+            <div className="callout warn" style={{ marginTop: '1rem' }}>
+              <Icon name="alert" />
+              <div>A semantic-review LLM step failed; details omitted by the API.</div>
             </div>
           )}
         </Card>
@@ -924,3 +830,5 @@ export function Details({ r }: { r: AnalysisResponse }) {
     </>
   );
 }
+
+
