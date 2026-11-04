@@ -10,6 +10,8 @@
 
 **Workbook SHA-256:** `1314578e44d4a66b21fd19effe441ed303dc2da2239423abf73dfb7d1c807353`
 
+> **Superseding dataset note (2026-11-04):** the 25-sheet extended workbook above is now deleted in the working tree. The working-tree `v1_0.xlsx` is an 18-sheet file with SHA-256 `12afb16d3ef7a3fb2812c2377403e7f7bd171625791adeaac16e08315eec2375` and cannot populate the extended tables this verification assumes. See [`T5_3_REPAIRED_DATASET_PREFLIGHT_AUDIT.md`](T5_3_REPAIRED_DATASET_PREFLIGHT_AUDIT.md).
+
 **Verification mode:** Static inspection of SQL migrations, Python source, and workbook content. No SQL statement was executed, no PostgreSQL connection was opened, no migration or import was run, no database or runtime configuration was changed, and no database-dependent test was executed. Runtime behavior is assessed from source code only and is reported separately from static facts.
 
 ---

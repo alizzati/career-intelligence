@@ -6,6 +6,8 @@ This audit corrects the earlier T5.2A design to preserve the repository’s lega
 
 This is a design-only audit. No database writes or SQL execution were performed.
 
+> **Superseding dataset note (2026-11-04):** the workbook hash recorded in §5 (`1314578e...`, 25-sheet extended workbook) belongs to the committed extended file, which is now deleted in the working tree. The working-tree `v1_0.xlsx` is an 18-sheet file with SHA-256 `12afb16d...`; it cannot populate the extended tables listed in this design. See [`T5_3_REPAIRED_DATASET_PREFLIGHT_AUDIT.md`](T5_3_REPAIRED_DATASET_PREFLIGHT_AUDIT.md).
+
 ## 2. Legacy compatibility matrix
 
 The application repository confirms the user-domain tables that must remain compatible.

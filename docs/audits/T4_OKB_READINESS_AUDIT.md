@@ -7,6 +7,8 @@
 **Overall T4 status:** **PARTIAL — audit executed; OKB data-ready gate not passed.**
 **Scope safety:** No source code, prompt, schema, migration, SQL, workbook, database record, or configuration was changed. No import, migration, seed, CV analysis, LLM call, browser action, or application workflow was executed. No credential or secret is recorded in this report.
 
+> **Superseding dataset note (2026-11-04):** the working-tree `data/occupational_knowledge_base_verified_v1_0.xlsx` is no longer the 55,399-byte / `ce858a6a...` file described in §2.1. It is now a 67,116-byte file with SHA-256 `12afb16d3ef7a3fb2812c2377403e7f7bd171625791adeaac16e08315eec2375`. The findings below remain valid for the committed original and the live database, but they do **not** describe the current working-tree dataset. See [`T5_3_REPAIRED_DATASET_PREFLIGHT_AUDIT.md`](T5_3_REPAIRED_DATASET_PREFLIGHT_AUDIT.md).
+
 ---
 
 ## 1. Executive summary and overall readiness status
