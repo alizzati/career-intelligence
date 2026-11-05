@@ -1,0 +1,110 @@
+{
+  "skills": [
+    {
+      "claimed_skill": "Document Management",
+      "proficiency": null,
+      "candidate_skill_id": null
+    },
+    {
+      "claimed_skill": "Microsoft Word",
+      "proficiency": null,
+      "candidate_skill_id": null
+    },
+    {
+      "claimed_skill": "Machine Learning",
+      "proficiency": null,
+      "candidate_skill_id": "S048"
+    }
+  ],
+  "evidence": [
+    {
+      "claimed_skill": "Machine Learning",
+      "evidence_type": "certifications",
+      "description": "Belajar Pengembangan Machine Learning",
+      "url": null
+    },
+    {
+      "claimed_skill": "Machine Learning",
+      "evidence_type": "work_experience",
+      "description": "Machine Learning Engineer Cohort at Coding Camp powered by DBS Foundation",
+      "url": null
+    }
+  ],
+  "education": [
+    {
+      "institution": "Universitas Sumatera Utara",
+      "degree": "Bachelor of Computer Science",
+      "field_of_study": "Computer Science",
+      "start_date": "2022",
+      "end_date": "2026",
+      "description": null
+    },
+    {
+      "institution": "SMA Swasta Harapan 1 Medan",
+      "degree": null,
+      "field_of_study": null,
+      "start_date": "July 2019",
+      "end_date": "June 2022",
+      "description": null
+    }
+  ],
+  "experience": [
+    {
+      "company": "BEM Fasilkom-TI USU",
+      "role_title": "Member of Interest and Talent Division",
+      "employment_type": null,
+      "start_date": "October 2024",
+      "end_date": "February 2026",
+      "description": "Faculty of Computer Science and Information Technology USU"
+    },
+    {
+      "company": "Coding Camp powered by DBS Foundation",
+      "role_title": "Machine Learning Engineer Cohort",
+      "employment_type": null,
+      "start_date": "February 2025",
+      "end_date": "July 2025",
+      "description": null
+    }
+  ],
+  "projects": [],
+  "certifications": [
+    {
+      "name": "Belajar Pengembangan Machine Learning",
+      "issuer": null,
+      "issue_date": null,
+      "expiry_date": null,
+      "credential_url": null
+    },
+    {
+      "name": "Belajar Fundamental Pemrosesan Data",
+      "issuer": null,
+      "issue_date": null,
+      "expiry_date": null,
+      "credential_url": null
+    },
+    {
+      "name": "Financial Literacy 101",
+      "issuer": null,
+      "issue_date": null,
+      "expiry_date": null,
+      "credential_url": null
+    },
+    {
+      "name": "Belajar Dasar Visualisasi Data",
+      "issuer": null,
+      "issue_date": null,
+      "expiry_date": null,
+      "credential_url": null
+    },
+    {
+      "name": "Belajar Analisis Data dengan Python",
+      "issuer": null,
+      "issue_date": null,
+      "expiry_date": null,
+      "credential_url": null
+    }
+  ]
+}
+
+
+

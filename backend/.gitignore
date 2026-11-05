@@ -20,3 +20,5 @@ upload/
 artifacts/
 backend/artifacts
 backend/check_import_schema.py
+frontend/dignostic_testing/
+../frontend/dignostic_testing/
