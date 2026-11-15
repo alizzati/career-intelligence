@@ -4,6 +4,8 @@ import sys
 from datetime import datetime
 from unittest import mock
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.agents.verification_agent import VerificationAgent
@@ -215,6 +217,15 @@ class ScriptedSequenceLLM:
         return response
 
 
+class ProviderServerError(RuntimeError):
+    """Mirror google.genai.errors.ServerError: ``.code`` set, ``.status_code`` unset."""
+
+    def __init__(self, code=503):
+        super().__init__(f"{code} provider failure")
+        self.code = code
+        self.status_code = None
+
+
 def run_agent(recommendations=None, skill_gap=None, roadmap=None, llm=None, evidence=None,
               semantic_max_retries=1):
     defaults = make_outputs()
@@ -331,6 +342,35 @@ def test_recommendation_score_tampering_fails_deterministic_check():
     assert f"recommendation.{changed.career_id}.deterministic_score" in failed
 
 
+def test_noncanonical_recommendation_career_id_fails_reference_checks():
+    recommendations, gap, roadmap, _ = make_outputs()
+    recommendations[0] = recommendations[0].model_copy(update={"career_id": "C999"})
+
+    result = run_agent(recommendations, gap, roadmap)
+
+    failed = {check.check for check in result.checks if check.status == "FAIL"}
+    assert "recommendation.canonical_careers" in failed
+    assert "recommendation.ranking" in failed
+
+
+def test_noncanonical_recommendation_skill_id_fails_deterministic_check():
+    recommendations, gap, roadmap, _ = make_outputs()
+    recommendation = recommendations[0]
+    invalid_skill = SkillRefOut(
+        skill_id="S999", canonical_name="Unknown skill", evidence_class="CORE",
+    )
+    recommendations[0] = recommendation.model_copy(update={
+        "matched_skills": [*recommendation.matched_skills, invalid_skill],
+    })
+
+    result = run_agent(recommendations, gap, roadmap)
+
+    assert result.status == "FAIL"
+    assert f"recommendation.{recommendation.career_id}.skill_categories" in {
+        check.check for check in result.checks if check.status == "FAIL"
+    }
+
+
 def test_skill_gap_category_tampering_fails_against_step_9_engine():
     recommendations, gap, roadmap, _ = make_outputs()
     changed_gap = gap.skill_gap.model_copy(update={"missing": []})
@@ -340,6 +380,23 @@ def test_skill_gap_category_tampering_fails_against_step_9_engine():
     assert "skill_gap.deterministic_result" in {
         check.check for check in result.checks if check.status == "FAIL"
     }
+
+
+def test_internal_skill_gap_recomputation_error_propagates():
+    _, gap, _, _ = make_outputs()
+    agent = VerificationAgent(llm_client=None, weights=WEIGHTS)
+    with mock.patch(
+        "app.agents.verification_agent.classify_skill_gap",
+        side_effect=RuntimeError("deterministic engine failed"),
+    ):
+        with pytest.raises(RuntimeError, match="deterministic engine failed"):
+            agent._verify_skill_gap(
+                gap.skill_gap,
+                {career.career_id: career for career in CAREERS},
+                REQUIRED,
+                PROFILE,
+                [],
+            )
 
 
 def test_step_10_narrative_ids_must_remain_in_their_step_9_category():
@@ -496,6 +553,48 @@ def test_semantic_review_persistent_transient_failure_stays_revise_after_bound()
     assert result.status == "REVISE"
     assert result.semantic_review_retry_count == 1
     assert result.semantic_review_failure_type == "ConnectionError"
+    assert len(llm.calls) == 2
+
+
+def test_semantic_review_retries_provider_server_error_code_then_passes():
+    llm = ScriptedSequenceLLM([ProviderServerError(503), {"unsupported_claims": []}])
+    result = run_agent(*_llm_generated_outputs(), llm=llm)
+    assert result.status == "PASS"
+    assert result.semantic_review_retry_count == 1
+    assert result.semantic_review_failure_type is None
+    assert len(llm.calls) == 2
+
+
+def test_semantic_review_persistent_provider_server_error_is_bounded():
+    llm = ScriptedSequenceLLM([ProviderServerError(503)] * 2)
+    result = run_agent(*_llm_generated_outputs(), llm=llm, semantic_max_retries=1)
+    assert result.status == "REVISE"
+    assert result.semantic_review_retry_count == 1
+    assert result.semantic_review_failure_type == "ProviderServerError"
+    semantic_check = next(
+        check for check in result.checks if check.check == "semantic.occupational_claims"
+    )
+    assert semantic_check.status == "REVISE"
+    assert len(llm.calls) == 2
+
+
+def test_semantic_review_non_transient_provider_error_is_not_retried():
+    llm = ScriptedSequenceLLM([ProviderServerError(400)])
+    result = run_agent(*_llm_generated_outputs(), llm=llm)
+    assert result.status == "REVISE"
+    assert result.semantic_review_retry_count == 0
+    assert result.semantic_review_failure_type == "ProviderServerError"
+    assert len(llm.calls) == 1
+
+
+def test_semantic_review_recognizes_transient_message_without_status_code():
+    llm = ScriptedSequenceLLM([
+        RuntimeError("The model is temporarily unavailable, please retry."),
+        {"unsupported_claims": []},
+    ])
+    result = run_agent(*_llm_generated_outputs(), llm=llm)
+    assert result.status == "PASS"
+    assert result.semantic_review_retry_count == 1
     assert len(llm.calls) == 2
 
 

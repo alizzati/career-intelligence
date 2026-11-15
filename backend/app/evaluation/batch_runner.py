@@ -48,6 +48,7 @@ from app.evaluation.schemas import (
     RecommendationPrediction,
     RecommendationReference,
 )
+from app.evaluation.subset_selection import SUBSET_SIZE
 from app.services.cv_text_extraction_service import CVTextExtractor
 from app.services.pii_redaction_service import redact_pii
 from sqlalchemy import text as sql_text
@@ -225,8 +226,15 @@ def load_candidate_manifest(
     cv_root: str | Path = DEFAULT_CV_ROOT,
     *,
     expected_count: int = EXPECTED_CANDIDATES,
+    allow_subset: bool = False,
 ) -> list[CandidateInput]:
-    """Validate workbook rows, crosswalk labels, unique paths, and content hashes."""
+    """Validate workbook rows, crosswalk labels, unique paths, and content hashes.
+
+    ``allow_subset`` validates a frozen subset crosswalk (for example the 12-CV
+    ablation manifest): every subset row must still match its workbook row, but
+    the crosswalk need not list all workbook candidates. The default keeps the
+    original all-candidates contract.
+    """
     crosswalk_path = Path(crosswalk_path)
     workbook_path = Path(workbook_path)
     root = Path(cv_root).resolve()
@@ -254,7 +262,17 @@ def load_candidate_manifest(
     except OSError as exc:
         raise BatchValidationError(f"cannot read crosswalk: {type(exc).__name__}") from None
 
-    if len(workbook_rows) != expected_count or len(crosswalk_rows) != expected_count:
+    if allow_subset:
+        if len(crosswalk_rows) != expected_count:
+            raise BatchValidationError(
+                f"expected {expected_count} crosswalk rows; found {len(crosswalk_rows)}"
+            )
+        if len(workbook_rows) < expected_count:
+            raise BatchValidationError(
+                f"workbook must contain at least {expected_count} candidate rows; "
+                f"found {len(workbook_rows)}"
+            )
+    elif len(workbook_rows) != expected_count or len(crosswalk_rows) != expected_count:
         raise BatchValidationError(
             f"expected {expected_count} workbook and crosswalk rows; found "
             f"{len(workbook_rows)} and {len(crosswalk_rows)}"
@@ -262,7 +280,10 @@ def load_candidate_manifest(
     ids = [row.get("candidate_id", "").strip() for row in crosswalk_rows]
     if any(not value for value in ids) or len(set(ids)) != len(ids):
         raise BatchValidationError("crosswalk candidate identifiers must be present and unique")
-    if set(ids) != set(workbook_by_id):
+    if allow_subset:
+        if not set(ids).issubset(workbook_by_id):
+            raise BatchValidationError("crosswalk candidate IDs are not a subset of the workbook")
+    elif set(ids) != set(workbook_by_id):
         raise BatchValidationError("crosswalk candidate IDs do not exactly match the workbook")
 
     seen_paths: set[Path] = set()
@@ -376,6 +397,7 @@ def build_dry_run_plan(
     configurations: Iterable[str] = ALL_CONFIGURATIONS,
     *,
     run_id: str = "dry-run",
+    manifest_source: str | None = None,
 ) -> dict[str, Any]:
     selected = list(configurations)
     if not selected or len(selected) != len(set(selected)):
@@ -385,17 +407,21 @@ def build_dry_run_plan(
     return {
         "mode": "dry_run",
         "run_id": run_id,
+        "manifest_source": manifest_source,
         "candidate_count": len(candidates),
         "configurations": selected,
         "planned_configuration_runs": len(candidates) * len(selected),
         "manifest_sha256": manifest_fingerprint(candidates),
         "database_required": any(configuration != "B0" for configuration in selected),
         "profile_persistence_required": any(configuration in {"B3", "F"} for configuration in selected),
+        "shared_frozen_bundle_per_candidate": True,
+        "labels_evaluator_only": True,
         "candidate_inputs": [
             {
                 "candidate_id": row.candidate_id,
                 "cv_filename": row.workbook_file,
                 "cv_sha256": row.cv_sha256,
+                "category_label": row.annotator_1,
                 "references": {
                     "annotator_1": row.annotator_1_career_id,
                     "annotator_2": row.annotator_2_career_id,
@@ -727,6 +753,7 @@ class CandidateBatchRunner:
         model: str,
         extractor_prompt_sha256: str,
         database_identity: dict[str, Any] | None = None,
+        reference_source: str = "docs/experiments/candidate_cv_career_crosswalk_draft.csv",
     ):
         self.candidates = candidates
         self.configurations = list(configurations)
@@ -743,6 +770,7 @@ class CandidateBatchRunner:
         self.model = model
         self.extractor_prompt_sha256 = extractor_prompt_sha256
         self.database_identity = database_identity
+        self.reference_source = reference_source
         self._evaluation_cases: dict[tuple[str, str, str], EvaluationCase] = {}
 
     def _bundle_for(self, candidate: CandidateInput):
@@ -954,12 +982,11 @@ class CandidateBatchRunner:
         self._write_summary_markdown(report)
         return report
 
-    @staticmethod
-    def _public_case_result(case: dict[str, Any]) -> dict[str, Any]:
+    def _public_case_result(self, case: dict[str, Any]) -> dict[str, Any]:
         candidate: CandidateInput = case["candidate"]
         output = {key: value for key, value in case.items() if key != "candidate"}
         references = {
-            "source": "data/ground_truth/Candidate_Profiles_Data.xlsx via candidate_cv_career_crosswalk_draft.csv",
+            "source": self.reference_source,
         }
         for annotator in ANNOTATORS:
             references[annotator] = {
@@ -1155,6 +1182,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--configuration", action="append", choices=ALL_CONFIGURATIONS)
     parser.add_argument("--limit", type=int, default=None, help="Run only the first N manifest rows.")
+    parser.add_argument(
+        "--subset-manifest", action="store_true",
+        help=(
+            "Validate the frozen 12-CV ablation crosswalk (subset of the workbook) "
+            "instead of requiring all 43 candidates."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true", help="Validate and print the plan without LLM or database operations.")
     parser.add_argument("--execute", action="store_true", help="Run real inference; default mode is dry-run.")
     parser.add_argument("--approve-live-llm", action="store_true")
@@ -1168,7 +1202,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        candidates = load_candidate_manifest(args.crosswalk, args.workbook, args.cv_root)
+        if args.subset_manifest:
+            candidates = load_candidate_manifest(
+                args.crosswalk,
+                args.workbook,
+                args.cv_root,
+                expected_count=SUBSET_SIZE,
+                allow_subset=True,
+            )
+        else:
+            candidates = load_candidate_manifest(args.crosswalk, args.workbook, args.cv_root)
         if args.limit is not None:
             if args.limit <= 0:
                 raise BatchValidationError("--limit must be positive")
@@ -1179,7 +1222,10 @@ def main(argv: list[str] | None = None) -> int:
             raise BatchValidationError("choose either --dry-run or --execute")
         if not args.execute:
             print(json.dumps(
-                build_dry_run_plan(candidates, configurations, run_id=run_id),
+                build_dry_run_plan(
+                    candidates, configurations, run_id=run_id,
+                    manifest_source=str(args.crosswalk),
+                ),
                 ensure_ascii=False,
                 indent=2,
             ))
@@ -1236,6 +1282,7 @@ def main(argv: list[str] | None = None) -> int:
             model=base_client.model,
             extractor_prompt_sha256=prompt_hash,
             database_identity=identity,
+            reference_source=str(args.crosswalk),
         )
         report = batch.run()
         print(json.dumps({

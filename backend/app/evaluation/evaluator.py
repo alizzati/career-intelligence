@@ -118,7 +118,11 @@ def _evaluate_skill_gap(case: EvaluationCase, metrics: dict, warnings: list[str]
         label.skill_id: label.status for label in reference.required_skill_status
     }
     names = (
-        ["skill_gap.status_macro_f1", "skill_gap.status_accuracy"]
+        [
+            "skill_gap.status_macro_f1",
+            "skill_gap.status_weighted_f1",
+            "skill_gap.status_accuracy",
+        ]
         + [
             f"skill_gap.{status}.{metric}"
             for status in ("matched_evidenced", "matched_claimed_only", "missing")
@@ -150,6 +154,11 @@ def _evaluate_skill_gap(case: EvaluationCase, metrics: dict, warnings: list[str]
     metrics["skill_gap.status_macro_f1"] = _result(
         "skill_gap.status_macro_f1",
         scores["status_macro_f1"],
+        reason="no status has reference support",
+    )
+    metrics["skill_gap.status_weighted_f1"] = _result(
+        "skill_gap.status_weighted_f1",
+        scores["status_weighted_f1"],
         reason="no status has reference support",
     )
     metrics["skill_gap.status_accuracy"] = _result(

@@ -168,16 +168,44 @@ class VerificationAgent:
         self.semantic_max_retries = semantic_max_retries
 
     @staticmethod
+    def _transient_status_code(exc: BaseException) -> int | None:
+        """Read a provider HTTP status from the attributes SDKs actually use.
+
+        Google's ``ServerError`` exposes ``code=503`` while leaving
+        ``status_code`` unset, so checking ``status_code`` alone misses every
+        provider-side outage and skips the bounded retry entirely.
+        """
+        for attribute in ("status_code", "code", "status", "http_status"):
+            value = getattr(exc, attribute, None)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str):
+                digits = value.strip()
+                if digits.isdigit():
+                    return int(digits)
+        return None
+
+    @staticmethod
     def _is_transient_semantic_failure(exc: BaseException) -> bool:
         if isinstance(exc, (LLMQuotaExceededError, LLMInvalidResponseError)):
             return False
         if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
             return True
-        status = getattr(exc, "status_code", None)
+        status = VerificationAgent._transient_status_code(exc)
         if status in {408, 425, 429, 500, 502, 503, 504}:
             return True
         name = type(exc).__name__.casefold()
-        return any(token in name for token in ("timeout", "connection", "transient", "temporarilyunavailable"))
+        if any(token in name for token in (
+            "timeout", "connection", "transient", "temporarilyunavailable",
+        )):
+            return True
+        message = str(exc).casefold()
+        return any(token in message for token in (
+            "temporarily unavailable", "service unavailable", "overloaded",
+            "deadline exceeded", "timed out", "connection reset",
+        ))
 
     def _verify_recommendations(
         self,
@@ -322,33 +350,26 @@ class VerificationAgent:
             "Career name/domain differs from the canonical knowledge-base record.",
             [career.career_id],
         )
-        try:
-            expected = classify_skill_gap(
-                gap.user_id, career, skills_by_career[career.career_id],
-                profile.skills, self.weights,
-                effective_skills=getattr(profile, "effective_skills", None),
-            )
-            actual_dump = redact_skill_gap_result(gap).model_dump()
-            expected_dump = redact_skill_gap_result(expected).model_dump()
-            result_valid = actual_dump == expected_dump
-            required_ids = [
-                skill.skill.skill_id for skill in skills_by_career[career.career_id]
-            ]
-            _add_check(
-                checks, "skill_gap.deterministic_result", result_valid,
-                "All four Step 9 categories, skill IDs, evidence data, and scores match "
-                "the deterministic skill-gap engine."
-                if result_valid else
-                "Skill-gap categories, IDs, evidence data, or scores differ from "
-                "the deterministic Step 9 result.",
-                required_ids,
-            )
-        except (KeyError, TypeError, ValueError, RuntimeError) as exc:
-            _add_check(
-                checks, "skill_gap.deterministic_result", False,
-                f"Could not reproduce the Step 9 result from the canonical inputs: {type(exc).__name__}.",
-                [career.career_id],
-            )
+        expected = classify_skill_gap(
+            gap.user_id, career, skills_by_career[career.career_id],
+            profile.skills, self.weights,
+            effective_skills=getattr(profile, "effective_skills", None),
+        )
+        actual_dump = redact_skill_gap_result(gap).model_dump()
+        expected_dump = redact_skill_gap_result(expected).model_dump()
+        result_valid = actual_dump == expected_dump
+        required_ids = [
+            skill.skill.skill_id for skill in skills_by_career[career.career_id]
+        ]
+        _add_check(
+            checks, "skill_gap.deterministic_result", result_valid,
+            "All four Step 9 categories, skill IDs, evidence data, and scores match "
+            "the deterministic skill-gap engine."
+            if result_valid else
+            "Skill-gap categories, IDs, evidence data, or scores differ from "
+            "the deterministic Step 9 result.",
+            required_ids,
+        )
 
     @staticmethod
     def _verify_user_evidence(

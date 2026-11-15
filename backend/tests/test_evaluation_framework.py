@@ -188,6 +188,7 @@ def test_full_case_metrics_are_computed():
     assert metrics["career.ndcg_at_3"].value == pytest.approx(1.0)
     assert metrics["career.mrr"].value == 1.0
     assert metrics["skill_gap.status_macro_f1"].value == pytest.approx(1.0)
+    assert metrics["skill_gap.status_weighted_f1"].value == pytest.approx(1.0)
     assert metrics["skill_gap.status_accuracy"].value == pytest.approx(1.0)
     assert metrics["skill_gap.over_credit_rate"].value == 0.0
     assert metrics["skill_gap.unmatched_claim_recall"].value == 1.0

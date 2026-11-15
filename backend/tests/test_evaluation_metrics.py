@@ -93,6 +93,24 @@ def test_classification_metrics_hand_computed():
     assert result["per_status"]["matched_claimed_only"]["f1"] == 0.0
     assert result["per_status"]["missing"]["f1"] == pytest.approx(1.0)
     assert result["status_macro_f1"] == pytest.approx((2 / 3 + 0.0 + 1.0) / 3)
+    # Weighted by reference support (1, 1, 2):
+    # (2/3 * 1 + 0.0 * 1 + 1.0 * 2) / 4
+    assert result["status_weighted_f1"] == pytest.approx(
+        (2 / 3 * 1 + 0.0 * 1 + 1.0 * 2) / 4
+    )
+    # Reference rows are the three required statuses; columns add "unpredicted".
+    assert result["confusion_matrix"]["matched_evidenced"]["matched_evidenced"] == 1
+    assert result["confusion_matrix"]["matched_claimed_only"]["matched_evidenced"] == 1
+    assert result["confusion_matrix"]["missing"]["missing"] == 2
+
+
+def test_classification_confusion_matrix_marks_unpredicted_skills():
+    result = classification_metrics(
+        {"s1": "missing", "s2": "matched_claimed_only"},
+        {"s2": "matched_claimed_only"},
+    )
+    assert result["confusion_matrix"]["missing"]["unpredicted"] == 1
+    assert result["confusion_matrix"]["matched_claimed_only"]["matched_claimed_only"] == 1
 
 
 def test_classification_missing_prediction_counts_as_false_negative():

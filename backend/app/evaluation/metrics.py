@@ -212,6 +212,24 @@ def classification_metrics(
         value is not None for value in supported
     ) else None
 
+    weighted_total = sum(item["support"] for item in per_status.values() if item["f1"] is not None)
+    weighted_f1 = (
+        sum(item["f1"] * item["support"] for item in per_status.values() if item["f1"] is not None)
+        / weighted_total
+        if weighted_total else None
+    )
+
+    matrix_labels = [*REQUIRED_STATUSES, "unpredicted"]
+    confusion_matrix = {
+        reference_status: {predicted_status: 0 for predicted_status in matrix_labels}
+        for reference_status in REQUIRED_STATUSES
+    }
+    for skill_id, reference_status in reference.items():
+        if reference_status not in REQUIRED_STATUSES:
+            continue
+        predicted_status = valid_prediction.get(skill_id, "unpredicted")
+        confusion_matrix[reference_status][predicted_status] += 1
+
     total = len(reference)
     correct = sum(
         1
@@ -220,8 +238,10 @@ def classification_metrics(
     )
     return {
         "status_macro_f1": macro_f1,
+        "status_weighted_f1": weighted_f1,
         "status_accuracy": _safe_ratio(correct, total),
         "per_status": per_status,
+        "confusion_matrix": confusion_matrix,
         "n": total,
     }
 
