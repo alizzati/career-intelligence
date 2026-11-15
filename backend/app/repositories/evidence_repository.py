@@ -18,7 +18,8 @@ def fetch_skill_source_evidence(conn: Connection, skill_id: str) -> list[dict]:
         SELECT sse.evidence_id, sse.source_name, sse.source_reference,
                sse.evidence_type, sse.confidence, sse.mapping_basis, sse.note,
                p.provenance_id AS p_id, p.source_name AS p_source_name, p.document_id,
-               p.document_title, p.version_or_year, p.url, p.source_type
+               p.document_title, p.version_or_year, p.page_or_section, p.url,
+               p.source_type, p.scope_note
         FROM skill_source_evidence sse
         LEFT JOIN provenance p ON p.provenance_id = sse.provenance_id
         WHERE sse.skill_id = :sid

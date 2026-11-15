@@ -237,9 +237,13 @@ def _out_profile(rec, run):
         }
     return {"extracted_summary": extracted_summary,
             "normalizations": [{"claim_fingerprint": _text_fingerprint(n.claimed_skill),
+                                "mention_id": n.mention_id,
                                 "skill_id": n.result.skill_id,
                                 "normalized_name": n.result.normalized_name, "method": n.result.method,
-                                "score": n.result.score} for n in _g(o, "normalizations", [])],
+                                "score": n.result.score, "outcome": n.result.outcome,
+                                "exact_match": n.result.exact_match,
+                                "fuzzy_candidates": [candidate.__dict__ for candidate in n.result.fuzzy_candidates]}
+                               for n in _g(o, "normalizations", [])],
             "skills_persisted": _g(o, "skills_persisted"), "evidence_persisted": _g(o, "evidence_persisted")}
 
 

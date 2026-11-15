@@ -124,14 +124,16 @@ class CareerRecommendationAgent:
         if full_profile is None:
             raise ValueError(f"user_id={user_id} does not exist")
 
-        # Build the user's normalized-skill input set ONCE. Skills with
-        # skill_id=None (never normalized) are included here for
-        # completeness but can never match any requirement -- the
-        # calculator enforces that by identity on skill_id, not a special
-        # case written here.
+        # Build the user's normalized-skill input set ONCE from the canonical
+        # effective view: accepted evidence (including evidence-only skills)
+        # participates, while legacy 'linked' rows do not. An empty effective
+        # view falls back to claims for offline fixtures only.
+        effective = full_profile.effective_skills or [
+            skill for skill in full_profile.skills if skill.skill_id is not None
+        ]
         user_skill_inputs = [
             UserSkillInput(skill_id=s.skill_id, evidence_status=s.evidence_status, proficiency=s.proficiency)
-            for s in full_profile.skills
+            for s in effective
         ]
 
         # Career candidates: EVERY career in the KB, enumerated directly

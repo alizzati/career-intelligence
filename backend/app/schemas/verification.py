@@ -26,3 +26,5 @@ class VerificationResult(BaseModel):
     unsupported_claims: list[UnsupportedClaim] = []
     required_revision: list[str] = []
     llm_error: str | None = None
+    semantic_review_retry_count: int = 0
+    semantic_review_failure_type: str | None = None

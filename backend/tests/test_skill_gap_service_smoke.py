@@ -2,6 +2,10 @@
 Step 9 smoke / integration tests: the deterministic Skill-Gap Engine
 against the REAL database. No LLM is involved anywhere in this test.
 
+Stage 3.4.1 note: a skill is 'linked' only through the deterministic
+evidence-acceptance gate, so the seeded accepted evidence is produced by the
+gate's certification anchor (no LLM call).
+
 Test users are created through user_service and removed in a `finally`
 block by exact user_id (targeted DELETE; no TRUNCATE).
 
@@ -19,6 +23,7 @@ from sqlalchemy import text
 
 from app.agents.career_recommendation_agent import CareerRecommendationAgent
 from app.core.db import engine
+from app.services import evidence_acceptance_service as gate
 from app.services import retrieval_service as rs
 from app.services import skill_gap_service as sgs
 from app.services import user_service as us
@@ -98,7 +103,26 @@ def run_tests():
     a = us.add_user_skill(user_id, claimed_skill=evidenced_skill.canonical_name,
                           skill_id=evidenced_skill.skill_id, normalized_skill=evidenced_skill.canonical_name,
                           proficiency="intermediate")
-    us.add_skill_evidence(a.user_skill_id, evidence_type="project", description="seed evidence")
+    # Stage 3.4.1: a skill is 'linked' only when accepted evidence exists.
+    # Seed accepted evidence deterministically through the acceptance gate: a
+    # certification whose title names the skill passes the structural gate and
+    # the deterministic certification anchor without any LLM call (D-08/D-09).
+    cv_text = f"Certifications: {evidenced_skill.canonical_name}."
+    cv_id = gate.cv_identity(user_id, cv_text)
+    cert = us.add_certification(user_id, name=evidenced_skill.canonical_name)
+    candidate = us.create_evidence_candidate(
+        candidate_key=gate.candidate_key(
+            user_id, cv_id, "user_certifications", cert.certification_id,
+            evidenced_skill.skill_id, evidenced_skill.canonical_name,
+        ),
+        user_id=user_id, cv_id=cv_id, source_type="certification",
+        source_table="user_certifications", source_id=cert.certification_id,
+        skill_id=evidenced_skill.skill_id, claimed_skill=evidenced_skill.canonical_name,
+        evidence_text=evidenced_skill.canonical_name,
+        evidence_span_hash=gate.span_hash(evidenced_skill.canonical_name),
+    )
+    acceptance = gate.evaluate_candidate(candidate["candidate_id"], cv_text, None)
+    assert acceptance["acceptance_status"] == gate.ACCEPTANCE_ACCEPTED, acceptance
     us.add_user_skill(user_id, claimed_skill=claimed_only_skill.canonical_name,
                       skill_id=claimed_only_skill.skill_id, normalized_skill=claimed_only_skill.canonical_name,
                       proficiency="beginner")

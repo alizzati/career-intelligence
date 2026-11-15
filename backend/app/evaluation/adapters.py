@@ -56,8 +56,12 @@ def recommendation_prediction_from_outputs(outputs: Any) -> RecommendationPredic
     evidenced: dict[str, list[str]] = {}
     evidence_counts: dict[str, dict[str, int]] = {}
     fit_scores: dict[str, float] = {}
-    for row in _list(outputs):
-        if not isinstance(row, dict) or not isinstance(row.get("career_id"), str):
+    for raw_row in _list(outputs):
+        try:
+            row = _as_dict(raw_row)
+        except TypeError:
+            continue
+        if not isinstance(row.get("career_id"), str):
             continue
         career_id = row["career_id"]
         if career_id in referenced:
@@ -84,6 +88,8 @@ def recommendation_prediction_from_outputs(outputs: Any) -> RecommendationPredic
 def skill_gap_prediction_from_outputs(output: Any) -> SkillGapPrediction | None:
     """Project a ``SkillGapAnalysisOut``/``SkillGapResult`` into a prediction."""
     data = _as_dict(output)
+    if data.get("status") == "NOT_APPLICABLE":
+        return None
     if isinstance(data.get("skill_gap"), dict):
         data = data["skill_gap"]
     career_id = data.get("career_id")
@@ -94,11 +100,17 @@ def skill_gap_prediction_from_outputs(output: Any) -> SkillGapPrediction | None:
         for row in _list(data.get(status)):
             if isinstance(row, dict) and isinstance(row.get("skill_id"), str):
                 statuses.setdefault(row["skill_id"], status)
+            elif isinstance(row, str):
+                statuses.setdefault(row, status)
     unmatched = [
         f"user_skill_id:{row['user_skill_id']}"
         for row in _list(data.get("unmatched_user_claims"))
         if isinstance(row, dict) and isinstance(row.get("user_skill_id"), int)
     ]
+    unmatched.extend(
+        f"mention_id:{row}" for row in _list(data.get("unmatched_user_claims"))
+        if isinstance(row, str)
+    )
     return SkillGapPrediction(
         career_id=career_id,
         required_skill_status=statuses,
@@ -108,6 +120,8 @@ def skill_gap_prediction_from_outputs(output: Any) -> SkillGapPrediction | None:
 
 def roadmap_prediction_from_outputs(output: Any) -> RoadmapPrediction | None:
     data = _as_dict(output)
+    if data.get("status") == "NOT_APPLICABLE":
+        return None
     items: list[RoadmapItemPrediction] = []
     for row in _list(data.get("items")):
         if not isinstance(row, dict):
@@ -199,6 +213,15 @@ def case_from_analysis_record(
     rather than being inferred.
     """
     outputs = record.get("agent_outputs") if isinstance(record.get("agent_outputs"), dict) else {}
+    baseline = record.get("baseline_result")
+    if not outputs and baseline is not None:
+        baseline_data = _as_dict(baseline)
+        outputs = {
+            "career_recommendation": baseline_data.get("recommendations"),
+            "skill_gap": baseline_data.get("skill_gap"),
+            "roadmap": baseline_data.get("roadmap"),
+            "verification": baseline_data.get("verification"),
+        }
     final = record.get("final_result") if isinstance(record.get("final_result"), dict) else {}
     final_status = final.get("final_status")
     run_status = "failed" if final_status == "ERROR" else "completed"
@@ -222,7 +245,7 @@ def case_from_analysis_record(
         else recorded_revision if isinstance(recorded_revision, int) else 0
     )
     verification = verification_prediction_from_outputs(
-        record.get("verification_result"),
+        record.get("verification_result", outputs.get("verification")),
         first_pass_status=first_pass_status,
         revision_count=revisions,
         claim_key=claim_key,

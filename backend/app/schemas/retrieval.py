@@ -39,8 +39,10 @@ class ProvenanceOut(BaseModel):
     document_id: str
     document_title: str
     version_or_year: str
+    page_or_section: Optional[str] = None
     url: Optional[str] = None
     source_type: str
+    scope_note: Optional[str] = None
 
 
 class EvidenceItem(BaseModel):
@@ -88,6 +90,9 @@ class TaskOut(BaseModel):
     task_category: str
     importance: Optional[float] = None
     source: str
+    source_code: Optional[str] = None
+    source_period: Optional[int] = None
+    geography: Optional[str] = None
 
 
 class TechnologyOut(BaseModel):
@@ -96,12 +101,17 @@ class TechnologyOut(BaseModel):
     technology_type: str
     frequency_pct: Optional[float] = None
     source: str
+    source_period: Optional[int] = None
+    geography: Optional[str] = None
+    evidence_note: Optional[str] = None
 
 
 class OccupationSourceMappingOut(BaseModel):
     mapping_id: str
     source_name: str
     source_code: str
+    source_title: Optional[str] = None
+    source_scope: Optional[str] = None
     confidence: str
     mapping_basis: str
     provenance: Optional[ProvenanceOut] = None

@@ -26,6 +26,8 @@ def redact_skill_gap_result(gap: SkillGapResult) -> SkillGapResult:
             if claim is not None:
                 claim["claimed_skill"] = _redact_text(claim["claimed_skill"])
                 claim["proficiency"] = _redact_text(claim["proficiency"])
+            for ref in item.get("accepted_evidence", []):
+                ref["claimed_skill"] = _redact_text(ref.get("claimed_skill"))
     for claim in data["unmatched_user_claims"]:
         claim["claimed_skill"] = _redact_text(claim["claimed_skill"])
         claim["proficiency"] = _redact_text(claim["proficiency"])

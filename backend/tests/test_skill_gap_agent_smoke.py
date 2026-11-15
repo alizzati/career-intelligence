@@ -25,6 +25,7 @@ from sqlalchemy import text
 from app.agents.career_recommendation_agent import CareerRecommendationAgent
 from app.agents.skill_gap_agent import NarrativeGenerationError, SkillGapAgent, load_kb_vocabulary
 from app.core.db import engine
+from app.services import evidence_acceptance_service as gate
 from app.services import retrieval_service as rs
 from app.services import skill_gap_service as sgs
 from app.services import user_service as us
@@ -113,7 +114,24 @@ def run_tests():
     user_id = new_user("mixed")
     a = us.add_user_skill(user_id, claimed_skill=evidenced_skill.canonical_name, skill_id=evidenced_skill.skill_id,
                           normalized_skill=evidenced_skill.canonical_name, proficiency="intermediate")
-    us.add_skill_evidence(a.user_skill_id, evidence_type="project", description="seed evidence")
+    # Stage 3.4.1: only accepted evidence makes a skill 'linked'. Seed it
+    # deterministically via the gate's certification anchor (no LLM call).
+    cv_text = f"Certifications: {evidenced_skill.canonical_name}."
+    cv_id = gate.cv_identity(user_id, cv_text)
+    cert = us.add_certification(user_id, name=evidenced_skill.canonical_name)
+    candidate = us.create_evidence_candidate(
+        candidate_key=gate.candidate_key(
+            user_id, cv_id, "user_certifications", cert.certification_id,
+            evidenced_skill.skill_id, evidenced_skill.canonical_name,
+        ),
+        user_id=user_id, cv_id=cv_id, source_type="certification",
+        source_table="user_certifications", source_id=cert.certification_id,
+        skill_id=evidenced_skill.skill_id, claimed_skill=evidenced_skill.canonical_name,
+        evidence_text=evidenced_skill.canonical_name,
+        evidence_span_hash=gate.span_hash(evidenced_skill.canonical_name),
+    )
+    acceptance = gate.evaluate_candidate(candidate["candidate_id"], cv_text, None)
+    assert acceptance["acceptance_status"] == gate.ACCEPTANCE_ACCEPTED, acceptance
     us.add_user_skill(user_id, claimed_skill=claimed_only_skill.canonical_name, skill_id=claimed_only_skill.skill_id,
                       normalized_skill=claimed_only_skill.canonical_name, proficiency="beginner")
     us.add_user_skill(user_id, claimed_skill="Some Totally Unnormalizable Claim", skill_id=None)

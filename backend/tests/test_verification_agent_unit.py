@@ -26,7 +26,9 @@ from app.schemas.skill_gap_agent import (
     SkillGapNarrative,
     SkillObservation,
 )
-from app.schemas.user import UserFullProfileOut, UserOut, UserSkillEvidenceOut, UserSkillOut
+from app.schemas.user import (
+    EvidenceCandidateOut, UserFullProfileOut, UserOut, UserSkillEvidenceOut, UserSkillOut,
+)
 from app.services.career_fit_service import (
     DEFAULT_WEIGHTS,
     RequiredSkillInput,
@@ -200,7 +202,21 @@ class ScriptedLLM:
         return self.response
 
 
-def run_agent(recommendations=None, skill_gap=None, roadmap=None, llm=None, evidence=None):
+class ScriptedSequenceLLM:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def complete_json(self, system, user, max_tokens=2000):
+        self.calls.append((system, user, max_tokens))
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+
+def run_agent(recommendations=None, skill_gap=None, roadmap=None, llm=None, evidence=None,
+              semantic_max_retries=1):
     defaults = make_outputs()
     recommendations = recommendations if recommendations is not None else defaults[0]
     skill_gap = skill_gap if skill_gap is not None else defaults[1]
@@ -216,9 +232,22 @@ def run_agent(recommendations=None, skill_gap=None, roadmap=None, llm=None, evid
         mock.patch("app.agents.verification_agent.rs.get_occupational_context",
                    side_effect=lambda career_id: contexts[career_id]),
     ):
-        return VerificationAgent(llm_client=llm, weights=WEIGHTS).run(
+        return VerificationAgent(
+            llm_client=llm, weights=WEIGHTS, semantic_max_retries=semantic_max_retries,
+        ).run(
             recommendations, skill_gap, roadmap,
         )
+
+
+def _llm_generated_outputs():
+    recommendations, gap, roadmap, _ = make_outputs()
+    recommendations[0] = recommendations[0].model_copy(update={
+        "reasoning": "LLM generated explanation grounded in supplied evidence.",
+        "reasoning_source": "llm",
+    })
+    gap = gap.model_copy(update={"narrative_source": "llm"})
+    roadmap = roadmap.model_copy(update={"narrative_source": "llm"})
+    return recommendations, gap, roadmap
 
 def test_all_deterministic_outputs_pass_without_llm_call():
     recommendations, gap, roadmap, _ = make_outputs()
@@ -240,6 +269,27 @@ def test_all_deterministic_outputs_pass_without_llm_call():
     assert not llm.calls
     assert all(check.status == "PASS" for check in result.checks)
     assert after == before
+
+
+def test_unresolved_evidence_candidate_is_a_revision_finding():
+    _, analysis, _, _ = make_outputs()
+    profile = PROFILE.model_copy(update={
+        "evidence_candidates": [EvidenceCandidateOut(
+            candidate_id=12, skill_id="S001", source_type="project",
+            source_table="user_projects", source_id=44,
+            structural_status="passed", semantic_status="REVISE",
+            acceptance_status="revise", decision_reason="Needs reassessment.",
+        )],
+    })
+    checks = []
+
+    VerificationAgent._verify_user_evidence(profile, analysis.skill_gap, checks)
+
+    candidate_check = next(
+        check for check in checks if check.check == "user_evidence.candidate_decisions"
+    )
+    assert candidate_check.status == "REVISE"
+    assert candidate_check.source_ids == ["S001"]
 
 
 def test_semantic_llm_receives_redacted_user_derived_narrative_text():
@@ -420,6 +470,52 @@ def test_provenance_record_missing_source_identity_fails_explicitly():
         check.check == "evidence.provenance_references" and check.status == "FAIL"
         for check in result.checks
     )
+
+
+def test_semantic_review_retries_transient_failure_once_then_passes():
+    llm = ScriptedSequenceLLM([TimeoutError("temporary timeout"), {"unsupported_claims": []}])
+    result = run_agent(*_llm_generated_outputs(), llm=llm)
+    assert result.status == "PASS"
+    assert result.semantic_review_retry_count == 1
+    assert result.semantic_review_failure_type is None
+    assert len(llm.calls) == 2
+
+
+def test_successful_semantic_review_records_zero_retries():
+    llm = ScriptedSequenceLLM([{"unsupported_claims": []}])
+    result = run_agent(*_llm_generated_outputs(), llm=llm)
+    assert result.status == "PASS"
+    assert result.semantic_review_retry_count == 0
+    assert result.semantic_review_failure_type is None
+    assert len(llm.calls) == 1
+
+
+def test_semantic_review_persistent_transient_failure_stays_revise_after_bound():
+    llm = ScriptedSequenceLLM([ConnectionError("temporary network failure")] * 2)
+    result = run_agent(*_llm_generated_outputs(), llm=llm, semantic_max_retries=1)
+    assert result.status == "REVISE"
+    assert result.semantic_review_retry_count == 1
+    assert result.semantic_review_failure_type == "ConnectionError"
+    assert len(llm.calls) == 2
+
+
+def test_semantic_review_quota_exhaustion_is_not_retried_or_passed():
+    from app.agents.llm_errors import LLMQuotaExceededError
+    llm = ScriptedSequenceLLM([LLMQuotaExceededError()])
+    result = run_agent(*_llm_generated_outputs(), llm=llm)
+    assert result.status == "REVISE"
+    assert result.semantic_review_retry_count == 0
+    assert result.semantic_review_failure_type == "LLMQuotaExceededError"
+    assert len(llm.calls) == 1
+
+
+def test_semantic_review_invalid_response_is_not_retried_or_passed():
+    llm = ScriptedSequenceLLM([{"not_unsupported_claims": []}])
+    result = run_agent(*_llm_generated_outputs(), llm=llm)
+    assert result.status == "REVISE"
+    assert result.semantic_review_retry_count == 0
+    assert result.semantic_review_failure_type == "InvalidSemanticReviewResponse"
+    assert len(llm.calls) == 1
 
 
 if __name__ == "__main__":

@@ -43,7 +43,8 @@ def fetch_competency_skills(conn: Connection, unit_ids: list[str]) -> list[dict]
 
 def fetch_tasks_for_occupation(conn: Connection, occupation_id: str) -> list[dict]:
     rows = conn.execute(text("""
-        SELECT task_id, task_description, task_category, importance, source
+        SELECT task_id, task_description, task_category, importance, source,
+               source_code, source_period, geography
         FROM tasks WHERE occupation_id = :oid
         ORDER BY importance DESC NULLS LAST, task_id
     """), {"oid": occupation_id}).mappings().all()
@@ -52,7 +53,8 @@ def fetch_tasks_for_occupation(conn: Connection, occupation_id: str) -> list[dic
 
 def fetch_technologies_for_occupation(conn: Connection, occupation_id: str) -> list[dict]:
     rows = conn.execute(text("""
-        SELECT technology_id, technology_name, technology_type, frequency_pct, source
+        SELECT technology_id, technology_name, technology_type, frequency_pct, source,
+               source_period, geography, evidence_note
         FROM technologies WHERE occupation_id = :oid
         ORDER BY frequency_pct DESC NULLS LAST, technology_id
     """), {"oid": occupation_id}).mappings().all()
@@ -61,10 +63,11 @@ def fetch_technologies_for_occupation(conn: Connection, occupation_id: str) -> l
 
 def fetch_source_mappings_for_occupation(conn: Connection, occupation_id: str) -> list[dict]:
     rows = conn.execute(text("""
-        SELECT osm.mapping_id, osm.source_name, osm.source_code, osm.confidence,
-               osm.mapping_basis, osm.provenance_id,
+        SELECT osm.mapping_id, osm.source_name, osm.source_code, osm.source_title,
+               osm.source_scope, osm.confidence, osm.mapping_basis, osm.provenance_id,
                p.provenance_id AS p_id, p.source_name AS p_source_name, p.document_id,
-               p.document_title, p.version_or_year, p.url, p.source_type
+               p.document_title, p.version_or_year, p.page_or_section, p.url,
+               p.source_type, p.scope_note
         FROM occupation_source_mapping osm
         LEFT JOIN provenance p ON p.provenance_id = osm.provenance_id
         WHERE osm.occupation_id = :oid

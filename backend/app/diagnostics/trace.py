@@ -292,6 +292,9 @@ def build_profile_stage(profile_result: Any, *, duration_ms: float | None = None
                 "normalized_name": _text(result.get("normalized_name"), 120),
                 "method": _text(result.get("method"), 40),
                 "score": result.get("score"),
+                "outcome": _text(result.get("outcome"), 20),
+                "exact_match": result.get("exact_match") is True,
+                "fuzzy_candidates": _rows(result.get("fuzzy_candidates")),
                 "matched": result.get("skill_id") is not None,
             }
         )

@@ -27,8 +27,22 @@ class MatchedUserClaim(BaseModel):
     and is never compared against any career requirement."""
     claimed_skill: str            # verbatim from user_skills
     proficiency: Optional[str] = None
-    evidence_status: str          # 'linked' | 'none'
+    evidence_status: str          # effective: 'linked' | 'none'
     evidence_count: int
+
+
+class AcceptedEvidenceRef(BaseModel):
+    """Minimal accepted-evidence provenance shown in a skill-gap result.
+
+    Raw CV spans are deliberately not included; they are temporary.
+    """
+    accepted_evidence_id: int
+    cv_id: str
+    skill_id: str
+    source_type: str
+    source_table: str
+    source_id: Optional[int] = None
+    claimed_skill: Optional[str] = None
 
 
 class SkillGapItem(BaseModel):
@@ -40,7 +54,8 @@ class SkillGapItem(BaseModel):
     kb_confidence: str            # KB metadata: career_skills.confidence (descriptive only)
     weight: float                 # echoed from compute_career_fit(), not computed here
     contribution: float           # echoed from compute_career_fit(), not computed here
-    matched_user_claim: Optional[MatchedUserClaim] = None   # None when status == 'missing'
+    matched_user_claim: Optional[MatchedUserClaim] = None   # None when status == 'missing' or evidence-only
+    accepted_evidence: list[AcceptedEvidenceRef] = []
 
 
 class UnmatchedUserClaim(BaseModel):

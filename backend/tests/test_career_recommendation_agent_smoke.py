@@ -111,12 +111,19 @@ def main():
     assert top.reasoning_source == "llm"
     print(f"  top career reasoning_source={top.reasoning_source!r}: {top.reasoning!r}")
 
-    # 7. output has matched / claimed-only / missing preview
-    db_management_career = next((r for r in recs if any(s.skill_id == "S035" for s in r.matched_skills)), None)
+    # 7. output has matched / claimed-only / missing preview. Under Stage
+    # 3.4.1 the seeded evidence is a candidate that cannot be accepted from the
+    # placeholder profile text, so S035 remains a CLAIM (claimed-only), not an
+    # evidenced match. This also proves legacy evidence is not auto-trusted.
+    db_management_career = next(
+        (r for r in recs if any(s.skill_id == "S035" for s in r.claimed_only_skills)), None,
+    )
     assert db_management_career is not None, \
-        "expected at least one career where 'Database Management' (S035) shows as a matched (linked) skill"
-    print(f"  career {db_management_career.career_id} shows S035 as matched: "
-          f"{[s.canonical_name for s in db_management_career.matched_skills]}")
+        "expected at least one career where 'Database Management' (S035) shows as claimed-only"
+    assert all(s.skill_id != "S035" for s in db_management_career.matched_skills), \
+        "S035 must not be a matched (evidenced) skill without accepted evidence"
+    print(f"  career {db_management_career.career_id} shows S035 as claimed-only: "
+          f"{[s.canonical_name for s in db_management_career.claimed_only_skills]}")
     assert isinstance(db_management_career.claimed_only_skills, list)
     assert isinstance(db_management_career.missing_skills_preview, list)
     assert len(db_management_career.missing_skills_preview) > 0, \

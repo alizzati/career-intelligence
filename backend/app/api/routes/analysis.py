@@ -3,10 +3,14 @@
 CV order: bounded read -> CVTextExtractor -> redact_pii -> CareerWorkflow
 (Profile Agent receives only redacted text). No auth is implemented."""
 import logging
+import json
+import re
+import traceback
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from starlette.concurrency import run_in_threadpool
+from sqlalchemy.exc import DBAPIError
 
 from app.api.dependencies import get_workflow
 from app.api.errors import ApiError
@@ -62,8 +66,62 @@ def _internal_error(exc: Exception) -> ApiError:
     if isinstance(exc, DatabaseConfigurationError):
         logger.error("Database is not configured.")
         return ApiError(503, "database_not_configured", "The service database is not configured.")
-    logger.error("Analysis request failed (%s).", type(exc).__name__)  # type only
+    frames = [
+        {
+            "file": frame.filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1],
+            "function": frame.name,
+            "line": frame.lineno,
+        }
+        for frame in traceback.extract_tb(exc.__traceback__)[-24:]
+    ]
+    diagnostic = {
+        "exception_class": type(exc).__name__,
+        "traceback_frames": frames,
+    }
+    if isinstance(exc, DBAPIError):
+        diagnostic.update(_safe_database_error_details(exc))
+        logger.error("Analysis database request failed; safe_diagnostics=%s", json.dumps(diagnostic))
+    else:
+        logger.error("Analysis request failed; safe_diagnostics=%s", json.dumps(diagnostic))
     return ApiError(500, "internal_error", "An internal error occurred.")
+
+
+def _safe_database_error_details(exc: DBAPIError) -> dict[str, str | None]:
+    """Return only non-sensitive DBAPI diagnostics; never log SQL or bound values."""
+    original = getattr(exc, "orig", None)
+    diag = getattr(original, "diag", None)
+    sqlstate = (
+        getattr(original, "sqlstate", None)
+        or getattr(original, "pgcode", None)
+        or getattr(diag, "sqlstate", None)
+    )
+    if not isinstance(sqlstate, str) or re.fullmatch(r"[0-9A-Z]{5}", sqlstate) is None:
+        sqlstate = None
+
+    primary = getattr(diag, "message_primary", None)
+    if not isinstance(primary, str):
+        return {"sqlstate": sqlstate, "database_error": "Database driver details withheld."}
+    message = " ".join(primary.split())
+    patterns = (
+        (r'(?:relation|table) ["\']?([A-Za-z_][A-Za-z0-9_$.]*)["\']? does not exist',
+         "referenced relation is missing: {}"),
+        (r'column ["\']?([A-Za-z_][A-Za-z0-9_$.]*)["\']? does not exist',
+         "referenced column is missing: {}"),
+        (r'null value in column ["\']?([A-Za-z_][A-Za-z0-9_$.]*)["\']? violates not-null constraint',
+         "not-null constraint violation on column: {}"),
+        (r'(?:duplicate key value violates unique constraint|violates foreign key constraint) ["\']?([A-Za-z_][A-Za-z0-9_$.]*)["\']?',
+         "constraint violation: {}"),
+        (r'invalid input syntax for type ([A-Za-z_][A-Za-z0-9_ ]*)',
+         "invalid value for database type: {}"),
+    )
+    for pattern, template in patterns:
+        match = re.fullmatch(pattern, message, flags=re.IGNORECASE)
+        if match:
+            detail = template.format(match.group(1).strip())
+            return {"sqlstate": sqlstate, "database_error": detail}
+    if re.match(r"syntax error at or near\b", message, flags=re.IGNORECASE):
+        return {"sqlstate": sqlstate, "database_error": "PostgreSQL syntax error; token withheld."}
+    return {"sqlstate": sqlstate, "database_error": "PostgreSQL reported an error; message withheld."}
 
 
 @router.post("/cv", response_model=AnalysisResponse, responses=_ERRORS)

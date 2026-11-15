@@ -12,6 +12,12 @@ client test doubles below instead of a live API call. What IS proven:
   - persistence via user_service/user_repository is correct
   - B1 (evidence-to-skill matching) is fixed: evidence with different
     casing/whitespace than its skill claim still attaches correctly
+
+Stage 3.4.1 note: an extracted evidence row is stored as a CANDIDATE and must
+pass the acceptance gate to become accepted evidence. This fake profile text
+does not contain the evidence spans, so candidates fail the structural
+CV-traceability check and effective status stays 'none'. The legacy audit row
+is still attached, which is what the B1 proof checks.
 What is NOT proven here: actual LLM extraction quality against a real
 model (that requires running the real Gemini client separately).
 
@@ -97,13 +103,15 @@ def main():
 
     skills_by_claim = {s.claimed_skill: s for s in full.skills}
     db_skill = skills_by_claim["Database Management"]
-    assert db_skill.skill_id == "S035" and db_skill.evidence_status == "linked" and len(db_skill.evidence) == 1
+    assert db_skill.skill_id == "S035" and db_skill.evidence_status == "none" and len(db_skill.evidence) == 1
+    assert db_skill.accepted_evidence == []
     print(f"  Database Management: skill_id={db_skill.skill_id} status={db_skill.evidence_status} "
-          f"evidence={len(db_skill.evidence)}")
+          f"evidence={len(db_skill.evidence)} (legacy audit row, not yet accepted)")
 
     typo_skill = skills_by_claim["Programing"]
     assert typo_skill.skill_id == "S065"  # fuzzy-resolved to 'Programming'
-    assert typo_skill.evidence_status == "linked"  # has a self-report evidence row
+    assert typo_skill.evidence_status == "none"  # legacy self-report row is not accepted
+    assert len(typo_skill.evidence) == 1 and typo_skill.accepted_evidence == []
     print(f"  Programing (typo): skill_id={typo_skill.skill_id} normalized={typo_skill.normalized_skill} "
           f"status={typo_skill.evidence_status}")
 
@@ -184,10 +192,12 @@ def test_b1_evidence_matching():
     # (5) canonical skill_id untouched by the fix
     assert db.skill_id == "S035", f"FAIL: skill_id changed unexpectedly, got {db.skill_id!r}"
 
-    # (2) + (4): evidence found the correct user_skill AND evidence_status
-    # transitioned none -> linked as a direct result of a persisted evidence row
-    assert db.evidence_status == "linked", \
-        f"B1 NOT FIXED: evidence_status is {db.evidence_status!r}, expected 'linked'"
+    # (2) + (4): evidence found the correct user_skill. Under Stage 3.4.1 the
+    # legacy audit row does NOT grant effective 'linked' status: only accepted
+    # evidence can. The row itself proves B1 matching still works.
+    assert db.evidence_status == "none", \
+        f"B1 changed unexpectedly: effective status is {db.evidence_status!r}"
+    assert db.accepted_evidence == []
 
     # (8) evidence count correct -- not zero (dropped), not duplicated
     assert len(db.evidence) == 1, \

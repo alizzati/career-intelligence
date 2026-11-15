@@ -266,10 +266,15 @@ def _profile_output(state: dict, source: str, executed: bool) -> dict:
             claim = getattr(normalization, "claimed_skill", None)
             outcome = getattr(normalization, "result", None)
             normalizations.append({
+                "mention_id": getattr(normalization, "mention_id", None),
                 "claim_sha256": sha256_text(claim) if isinstance(claim, str) else None,
                 "skill_id": getattr(outcome, "skill_id", None),
+                "normalized_name": getattr(outcome, "normalized_name", None),
                 "method": getattr(outcome, "method", None),
                 "score": getattr(outcome, "score", None),
+                "outcome": getattr(outcome, "outcome", None),
+                "exact_match": getattr(outcome, "exact_match", False),
+                "fuzzy_candidates": [candidate.__dict__ for candidate in getattr(outcome, "fuzzy_candidates", [])],
             })
         return {
             "executed": True,

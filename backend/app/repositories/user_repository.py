@@ -249,7 +249,8 @@ _EVID_MATCH = (f"user_skill_id = :usid AND CAST(evidence_type AS text) = CAST(:e
 
 def add_skill_evidence(conn: Connection, user_skill_id: int, evidence_type: str,
                        source_table: str | None, source_id: int | None,
-                       description: str | None, url: str | None) -> dict:
+                       description: str | None, url: str | None,
+                       mark_linked: bool = True) -> dict:
     _advisory_lock(conn, _NS_EVIDENCE, user_skill_id)
     row = _insert_or_fetch(
         conn,
@@ -262,9 +263,12 @@ def add_skill_evidence(conn: Connection, user_skill_id: int, evidence_type: str,
          "sid": source_id, "desc": description, "url": url},
         ("usid", "etype", "desc", "url"),
     )
-    # a skill with >=1 evidence row is no longer 'none'
-    conn.execute(text("UPDATE user_skills SET evidence_status = 'linked' WHERE user_skill_id = :usid"),
-                 {"usid": user_skill_id})
+    # Legacy behaviour for direct callers. Stage 3.4.1 evidence acceptance
+    # passes mark_linked=False: only accepted evidence may make a skill
+    # 'linked' in the effective profile.
+    if mark_linked:
+        conn.execute(text("UPDATE user_skills SET evidence_status = 'linked' WHERE user_skill_id = :usid"),
+                     {"usid": user_skill_id})
     return row
 
 
@@ -274,6 +278,195 @@ def fetch_skill_evidence(conn: Connection, user_skill_id: int) -> list[dict]:
         FROM user_skill_evidence WHERE user_skill_id = :usid ORDER BY evidence_id
     """), {"usid": user_skill_id}).mappings().all()
     return [dict(r) for r in rows]
+
+
+# ---- Evidence acceptance (Stage 3.4.1) -----------------------------------------
+_CANDIDATE_COLS = (
+    "candidate_id, candidate_key, user_id, cv_id, source_type, source_table, "
+    "source_id, skill_id, claimed_skill, evidence_text, evidence_span_hash, "
+    "structural_status, structural_reason, semantic_status, decision_reason, "
+    "acceptance_status, span_removed_at, created_at, updated_at"
+)
+_ACCEPTED_COLS = (
+    "a.accepted_evidence_id, a.user_id, a.cv_id, a.skill_id, "
+    "s.canonical_name, a.candidate_id, a.source_type, a.source_table, "
+    "a.source_id, a.claimed_skill, a.accepted_at"
+)
+_SOURCE_TABLES = {
+    "user_education": ("user_education", "education_id"),
+    "user_experience": ("user_experience", "experience_id"),
+    "user_projects": ("user_projects", "project_id"),
+    "user_certifications": ("user_certifications", "certification_id"),
+    "user_profiles": ("user_profiles", "user_id"),
+    "user_skills": ("user_skills", "user_skill_id"),
+}
+
+
+def create_evidence_candidate(conn: Connection, *, candidate_key: str, user_id: int,
+                              cv_id: str, source_type: str, source_table: str,
+                              source_id: int | None, skill_id: str | None,
+                              claimed_skill: str | None, evidence_text: str | None,
+                              evidence_span_hash: str | None,
+                              structural_status: str = "pending",
+                              structural_reason: str | None = None) -> dict:
+    """Insert one candidate idempotently (one row per CV/source/skill)."""
+    row = conn.execute(text(f"""
+        INSERT INTO user_evidence_candidates (
+            candidate_key, user_id, cv_id, source_type, source_table, source_id,
+            skill_id, claimed_skill, evidence_text, evidence_span_hash,
+            structural_status, structural_reason
+        ) VALUES (
+            :key, :uid, :cv, :stype, :stable, :sid, :skill, :claim, :etext, :ehash,
+            :sstatus, :sreason
+        )
+        ON CONFLICT (candidate_key) DO UPDATE SET updated_at = now()
+        RETURNING {_CANDIDATE_COLS}
+    """), {
+        "key": candidate_key, "uid": user_id, "cv": cv_id, "stype": source_type,
+        "stable": source_table, "sid": source_id, "skill": skill_id,
+        "claim": claimed_skill, "etext": evidence_text, "ehash": evidence_span_hash,
+        "sstatus": structural_status, "sreason": structural_reason,
+    }).mappings().one()
+    return dict(row)
+
+
+def fetch_evidence_candidate(conn: Connection, candidate_id: int) -> dict | None:
+    row = conn.execute(text(f"""
+        SELECT {_CANDIDATE_COLS} FROM user_evidence_candidates
+        WHERE candidate_id = :cid
+    """), {"cid": candidate_id}).mappings().first()
+    return dict(row) if row else None
+
+
+def fetch_evidence_candidates(conn: Connection, user_id: int,
+                              acceptance_status: str | None = None) -> list[dict]:
+    sql = f"SELECT {_CANDIDATE_COLS} FROM user_evidence_candidates WHERE user_id = :uid"
+    params = {"uid": user_id}
+    if acceptance_status is not None:
+        sql += " AND acceptance_status = :status"
+        params["status"] = acceptance_status
+    sql += " ORDER BY candidate_id"
+    return [dict(r) for r in conn.execute(text(sql), params).mappings().all()]
+
+
+def fetch_evidence_candidate_decisions(conn: Connection, user_id: int) -> list[dict]:
+    """Read decision provenance without loading temporary raw CV spans."""
+    rows = conn.execute(text("""
+        SELECT candidate_id, skill_id, source_type, source_table, source_id,
+               structural_status, semantic_status, acceptance_status, decision_reason
+        FROM user_evidence_candidates
+        WHERE user_id = :uid
+        ORDER BY candidate_id
+    """), {"uid": user_id}).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def update_evidence_candidate(conn: Connection, candidate_id: int, **fields) -> dict | None:
+    allowed = {
+        "structural_status", "structural_reason", "semantic_status",
+        "decision_reason", "acceptance_status",
+    }
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return fetch_evidence_candidate(conn, candidate_id)
+    assignments = ", ".join(f"{key} = :{key}" for key in updates)
+    params = {"cid": candidate_id, **updates}
+    row = conn.execute(text(f"""
+        UPDATE user_evidence_candidates
+        SET {assignments}, updated_at = now()
+        WHERE candidate_id = :cid
+        RETURNING {_CANDIDATE_COLS}
+    """), params).mappings().first()
+    return dict(row) if row else None
+
+
+def clear_evidence_candidate_span(conn: Connection, candidate_id: int) -> None:
+    conn.execute(text("""
+        UPDATE user_evidence_candidates
+        SET evidence_text = NULL, span_removed_at = now(), updated_at = now()
+        WHERE candidate_id = :cid AND evidence_text IS NOT NULL
+    """), {"cid": candidate_id})
+
+
+def clear_revise_evidence_spans(conn: Connection, user_id: int) -> int:
+    """Discard temporary spans when no further evidence revision is available."""
+    result = conn.execute(text("""
+        UPDATE user_evidence_candidates
+        SET evidence_text = NULL, span_removed_at = now(), updated_at = now()
+        WHERE user_id = :uid AND acceptance_status = 'revise'
+          AND structural_status = 'passed' AND evidence_text IS NOT NULL
+    """), {"uid": user_id})
+    return int(result.rowcount or 0)
+
+
+def insert_accepted_evidence(conn: Connection, *, user_id: int, cv_id: str,
+                             skill_id: str, candidate_id: int | None,
+                             source_type: str, source_table: str,
+                             source_id: int | None,
+                             claimed_skill: str | None) -> tuple[dict, bool]:
+    """Insert accepted credit, enforcing one contribution per CV + skill.
+
+    Returns ``(row, created)``. When ``created`` is False the existing
+    accepted row is returned and no second contribution is added (D-13/D-15).
+    """
+    row = conn.execute(text("""
+        INSERT INTO user_accepted_evidence (
+            user_id, cv_id, skill_id, candidate_id, source_type, source_table,
+            source_id, claimed_skill
+        ) VALUES (:uid, :cv, :skill, :cid, :stype, :stable, :sid, :claim)
+        ON CONFLICT (user_id, cv_id, skill_id) DO NOTHING
+        RETURNING accepted_evidence_id, user_id, cv_id, skill_id, candidate_id,
+                  source_type, source_table, source_id, claimed_skill, accepted_at
+    """), {
+        "uid": user_id, "cv": cv_id, "skill": skill_id, "cid": candidate_id,
+        "stype": source_type, "stable": source_table, "sid": source_id,
+        "claim": claimed_skill,
+    }).mappings().first()
+    if row is not None:
+        existing = dict(row)
+        existing["canonical_name"] = conn.execute(
+            text("SELECT canonical_name FROM skills WHERE skill_id = :sid"),
+            {"sid": skill_id},
+        ).scalar()
+        return existing, True
+    existing = conn.execute(text(f"""
+        SELECT {_ACCEPTED_COLS}
+        FROM user_accepted_evidence a JOIN skills s ON s.skill_id = a.skill_id
+        WHERE a.user_id = :uid AND a.cv_id = :cv AND a.skill_id = :skill
+        ORDER BY a.accepted_evidence_id LIMIT 1
+    """), {"uid": user_id, "cv": cv_id, "skill": skill_id}).mappings().first()
+    return (dict(existing), False) if existing else ({}, False)
+
+
+def fetch_accepted_evidence(conn: Connection, user_id: int) -> list[dict]:
+    rows = conn.execute(text(f"""
+        SELECT {_ACCEPTED_COLS}
+        FROM user_accepted_evidence a JOIN skills s ON s.skill_id = a.skill_id
+        WHERE a.user_id = :uid ORDER BY a.accepted_evidence_id
+    """), {"uid": user_id}).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def fetch_evidence_source_record(conn: Connection, source_table: str,
+                                 source_id: int, user_id: int) -> dict | None:
+    """Fetch an owned source record using a fixed whitelist of tables."""
+    mapping = _SOURCE_TABLES.get(source_table)
+    if mapping is None or source_id is None:
+        return None
+    table, id_column = mapping
+    row = conn.execute(text(
+        f"SELECT * FROM {table} WHERE {id_column} = :sid AND user_id = :uid"
+    ), {"sid": source_id, "uid": user_id}).mappings().first()
+    return dict(row) if row else None
+
+
+def fetch_skill_name(conn: Connection, skill_id: str) -> str | None:
+    return conn.execute(
+        text("SELECT canonical_name FROM skills WHERE skill_id = :sid"),
+        {"sid": skill_id},
+    ).scalar()
+
+
 
 
 # ---- Preferences ----------------------------------------------------------------

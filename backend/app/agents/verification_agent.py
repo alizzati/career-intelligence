@@ -16,6 +16,7 @@ from app.schemas.verification import (
     VerificationResult,
     VerificationStatus,
 )
+from app.agents.llm_errors import LLMInvalidResponseError, LLMQuotaExceededError
 from app.services import retrieval_service as rs
 from app.services import user_service as us
 from app.services.career_fit_service import (
@@ -61,10 +62,12 @@ def _gap_result(result: SkillGapResult | SkillGapAnalysisOut) -> SkillGapResult:
 
 
 def _user_skill_inputs(profile) -> list[UserSkillInput]:
+    # Mirror the canonical effective view used by Step 8 and Step 9.
+    effective = getattr(profile, "effective_skills", None) or profile.skills
     return [
         UserSkillInput(skill_id=skill.skill_id, evidence_status=skill.evidence_status,
                        proficiency=skill.proficiency)
-        for skill in profile.skills
+        for skill in effective
     ]
 
 
@@ -110,6 +113,8 @@ def _revision_for_check(check: VerificationCheck) -> str:
         owner = "deterministic_skill_gap_engine"
     elif check.check.startswith("roadmap."):
         owner = "learning_roadmap_agent"
+    elif check.check.startswith("user_evidence."):
+        owner = "evidence_gate"
     else:
         owner = "occupational_knowledge_base_provenance"
     return f"Review {check.check} in {owner}: {check.reason}"
@@ -152,9 +157,27 @@ class VerificationAgent:
     recommendation, skill-gap, or roadmap objects it receives.
     """
 
-    def __init__(self, llm_client: LLMClient | None = None, weights: dict | None = None):
+    def __init__(
+        self, llm_client: LLMClient | None = None, weights: dict | None = None,
+        semantic_max_retries: int = 1,
+    ):
+        if not isinstance(semantic_max_retries, int) or isinstance(semantic_max_retries, bool) or semantic_max_retries < 0:
+            raise ValueError("semantic_max_retries must be a non-negative integer")
         self.llm_client = llm_client
         self.weights = weights if weights is not None else load_scoring_weights()
+        self.semantic_max_retries = semantic_max_retries
+
+    @staticmethod
+    def _is_transient_semantic_failure(exc: BaseException) -> bool:
+        if isinstance(exc, (LLMQuotaExceededError, LLMInvalidResponseError)):
+            return False
+        if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+            return True
+        status = getattr(exc, "status_code", None)
+        if status in {408, 425, 429, 500, 502, 503, 504}:
+            return True
+        name = type(exc).__name__.casefold()
+        return any(token in name for token in ("timeout", "connection", "transient", "temporarilyunavailable"))
 
     def _verify_recommendations(
         self,
@@ -303,6 +326,7 @@ class VerificationAgent:
             expected = classify_skill_gap(
                 gap.user_id, career, skills_by_career[career.career_id],
                 profile.skills, self.weights,
+                effective_skills=getattr(profile, "effective_skills", None),
             )
             actual_dump = redact_skill_gap_result(gap).model_dump()
             expected_dump = redact_skill_gap_result(expected).model_dump()
@@ -325,6 +349,113 @@ class VerificationAgent:
                 f"Could not reproduce the Step 9 result from the canonical inputs: {type(exc).__name__}.",
                 [career.career_id],
             )
+
+    @staticmethod
+    def _verify_user_evidence(
+        profile,
+        gap: SkillGapResult,
+        checks: list[VerificationCheck],
+    ) -> None:
+        """Deterministic checks over the effective evidence view.
+
+        Only accepted evidence may produce 'linked'. Evidence-derived skills
+        must not fabricate a user claim, one CV/skill pair may contribute at
+        most once, and every `matched_evidenced` item must carry accepted
+        provenance. A profile with no effective view is a legacy offline
+        fixture and is not upgraded here.
+        """
+        effective = list(getattr(profile, "effective_skills", []) or [])
+        source = effective or list(getattr(profile, "skills", []) or [])
+        accepted = [
+            (skill, ref)
+            for skill in source
+            for ref in (getattr(skill, "accepted_evidence", []) or [])
+        ]
+        candidates = list(getattr(profile, "evidence_candidates", []) or [])
+        unresolved = [
+            item for item in candidates
+            if item.acceptance_status in {"pending", "revise"}
+        ]
+        checks.append(VerificationCheck(
+            check="user_evidence.candidate_decisions",
+            status="REVISE" if unresolved else "PASS",
+            reason=(
+                f"{len(unresolved)} evidence candidate(s) remain unresolved; they do not contribute credit."
+                if unresolved else
+                "Every evidence candidate has a terminal acceptance decision."
+            ),
+            source_ids=list(dict.fromkeys(
+                item.skill_id for item in unresolved if item.skill_id
+            )),
+        ))
+
+        provenance_valid = all(
+            bool(ref.cv_id)
+            and bool(ref.skill_id)
+            and bool(ref.source_type)
+            and bool(ref.source_table)
+            and ref.skill_id == skill.skill_id
+            for skill, ref in accepted
+        )
+        _add_check(
+            checks, "user_evidence.provenance", provenance_valid,
+            "Every accepted evidence row carries a CV identity, canonical skill, "
+            "and source-record provenance."
+            if provenance_valid else
+            "Accepted evidence is missing a CV identity, canonical skill, or source provenance.",
+            [ref.skill_id for _, ref in accepted],
+        )
+
+        pairs = [(ref.cv_id, ref.skill_id) for _, ref in accepted]
+        single_credit_valid = len(pairs) == len(set(pairs))
+        _add_check(
+            checks, "user_evidence.single_credit", single_credit_valid,
+            "Each CV and canonical skill contributes at most one accepted evidence credit."
+            if single_credit_valid else
+            "Duplicate accepted evidence credit was found for the same CV and canonical skill.",
+            [skill_id for _, skill_id in pairs],
+        )
+
+        if effective:
+            status_valid = all(
+                (skill.evidence_status == "linked")
+                == bool(getattr(skill, "accepted_evidence", []) or [])
+                for skill in effective
+            )
+            representation_valid = all(
+                (skill.user_skill_id is not None)
+                if getattr(skill, "source", "claim") != "evidence"
+                else (skill.user_skill_id is None and skill.claimed_skill is None)
+                for skill in effective
+            )
+            evidenced_valid = all(
+                bool(item.accepted_evidence) for item in gap.matched_evidenced
+            )
+        else:
+            status_valid = representation_valid = evidenced_valid = True
+
+        _add_check(
+            checks, "user_evidence.effective_status", status_valid,
+            "Only skills with accepted evidence are marked 'linked' in the effective profile."
+            if status_valid else
+            "An effective skill is 'linked' without accepted evidence, or has accepted "
+            "evidence but is not 'linked'.",
+            [skill.skill_id for skill in effective],
+        )
+        _add_check(
+            checks, "user_evidence.evidence_only_representation", representation_valid,
+            "Evidence-only skills carry no fabricated user claim."
+            if representation_valid else
+            "An evidence-only skill fabricates a user claim or a claim skill lacks a claim identity.",
+            [skill.skill_id for skill in effective],
+        )
+        _add_check(
+            checks, "user_evidence.accepted_required_for_evidenced", evidenced_valid,
+            "Every matched_evidenced skill carries accepted evidence provenance."
+            if evidenced_valid else
+            "A matched_evidenced skill has no accepted evidence provenance.",
+            [item.skill_id for item in gap.matched_evidenced],
+        )
 
     @staticmethod
     def _verify_skill_gap_narrative(
@@ -432,7 +563,7 @@ class VerificationAgent:
         skills_by_career: dict[str, list[CareerSkillOut]],
         checks: list[VerificationCheck],
         context_cache: dict[str, OccupationalContextOut],
-    ) -> tuple[list[UnsupportedClaim], list[str], str | None]:
+    ) -> tuple[list[UnsupportedClaim], list[str], str | None, int, str | None]:
         llm_text_present = any(
             recommendation.reasoning_source != "fallback-template"
             for recommendation in recommendations
@@ -446,7 +577,7 @@ class VerificationAgent:
                 checks, "semantic.occupational_claims", True,
                 "All free-text outputs use deterministic fallback templates; no LLM semantic review was needed.",
             )
-            return [], [], None
+            return [], [], None, 0, None
 
         if self.llm_client is None:
             checks.append(VerificationCheck(
@@ -456,7 +587,7 @@ class VerificationAgent:
             ))
             return [], [
                 "Manually review LLM-generated explanations against the retrieved occupational knowledge base."
-            ], "Semantic review skipped because no LLMClient was configured."
+            ], "Semantic review skipped because no LLMClient was configured.", 0, "LLMClientUnavailable"
 
         safe_recommendations = redact_recommendations(recommendations)
         safe_skill_gap = (
@@ -508,20 +639,26 @@ class VerificationAgent:
             "agent_outputs": output,
             "occupational_knowledge_base_records": contexts,
         }, ensure_ascii=False, default=str)
-        try:
-            response = self.llm_client.complete_json(
-                system=SEMANTIC_SYSTEM_PROMPT, user=prompt, max_tokens=1200,
-            )
-        except Exception as exc:
-            message = f"{type(exc).__name__}: {str(exc)[:200]}"
-            checks.append(VerificationCheck(
-                check="semantic.occupational_claims",
-                status="REVISE",
-                reason=f"Semantic review failed; its result is not treated as a pass ({message}).",
-            ))
-            return [], [
-                "Retry or manually complete semantic review of LLM-generated explanations."
-            ], message
+        retries = 0
+        while True:
+            try:
+                response = self.llm_client.complete_json(
+                    system=SEMANTIC_SYSTEM_PROMPT, user=prompt, max_tokens=1200,
+                )
+                break
+            except Exception as exc:
+                message = f"{type(exc).__name__}: {str(exc)[:200]}"
+                if self._is_transient_semantic_failure(exc) and retries < self.semantic_max_retries:
+                    retries += 1
+                    continue
+                checks.append(VerificationCheck(
+                    check="semantic.occupational_claims",
+                    status="REVISE",
+                    reason=f"Semantic review failed; its result is not treated as a pass ({message}).",
+                ))
+                return [], [
+                    "Retry or manually complete semantic review of LLM-generated explanations."
+                ], message, retries, type(exc).__name__
 
         try:
             if not isinstance(response, dict) or set(response) != {"unsupported_claims"}:
@@ -567,7 +704,7 @@ class VerificationAgent:
                     source_id for claim in unsupported for source_id in claim.source_ids
                 )),
             ))
-            return unsupported, revisions, None
+            return unsupported, revisions, None, retries, None
         except (TypeError, ValueError, KeyError) as exc:
             message = f"{type(exc).__name__}: {str(exc)[:200]}"
             checks.append(VerificationCheck(
@@ -577,7 +714,7 @@ class VerificationAgent:
             ))
             return [], [
                 "Retry or manually complete semantic review of LLM-generated explanations."
-            ], message
+            ], message, retries, "InvalidSemanticReviewResponse"
 
     @staticmethod
     def _component_owner(component: str) -> str:
@@ -609,6 +746,7 @@ class VerificationAgent:
         self._verify_skill_gap(
             gap, careers_by_id, skills_by_career, profile, checks,
         )
+        self._verify_user_evidence(profile, gap, checks)
         self._verify_skill_gap_narrative(skill_gap, checks)
         self._verify_roadmap(gap, roadmap, skills_by_career, checks)
 
@@ -662,7 +800,7 @@ class VerificationAgent:
             provenance_by_id,
         )
 
-        unsupported, revisions, llm_error = self._semantic_review(
+        unsupported, revisions, llm_error, semantic_retries, semantic_failure_type = self._semantic_review(
             recommendations, skill_gap, roadmap, careers, skills_by_career, checks,
             {gap.career_id: selected_context} if selected_context is not None else {},
         )
@@ -682,4 +820,6 @@ class VerificationAgent:
             unsupported_claims=unsupported,
             required_revision=revisions,
             llm_error=llm_error,
+            semantic_review_retry_count=semantic_retries,
+            semantic_review_failure_type=semantic_failure_type,
         )

@@ -69,7 +69,7 @@ def _evaluate_recommendation(case: EvaluationCase, metrics: dict, warnings: list
         warnings.append("recommendation reference labels were not supplied")
         return
     relevance = relevance_map(reference.labels)
-    names = [f"career.hit_at_{k}" for k in HIT_K_VALUES] + [
+    names = ["career.top1_accuracy"] + [f"career.hit_at_{k}" for k in HIT_K_VALUES] + [
         f"career.ndcg_at_{NDCG_K}",
         "career.mrr",
     ]
@@ -80,6 +80,11 @@ def _evaluate_recommendation(case: EvaluationCase, metrics: dict, warnings: list
         _add_unavailable(metrics, names, "recommendation prediction is unavailable")
         return
     ranking = case.recommendation.ranking
+    metrics["career.top1_accuracy"] = _result(
+        "career.top1_accuracy",
+        hit_at_k(ranking, relevance, 1),
+        reason="no relevant career is labeled for top-1 accuracy",
+    )
     for k in HIT_K_VALUES:
         metrics[f"career.hit_at_{k}"] = _result(
             f"career.hit_at_{k}",

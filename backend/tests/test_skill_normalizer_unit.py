@@ -45,5 +45,34 @@ def main():
     print("\nALL SKILL NORMALIZER UNIT TESTS PASSED.")
 
 
+def test_normalizer_diagnostics_cover_exact_fuzzy_unmatched_and_ambiguous():
+    exact = normalize_skill(" database management ", CATALOG)
+    assert exact.outcome == "matched" and exact.exact_match is True
+    assert exact.fuzzy_candidates[0].similarity == 1.0
+
+    fuzzy = normalize_skill("Programing", CATALOG)
+    assert fuzzy.outcome == "matched" and fuzzy.method == "fuzzy-deterministic"
+    assert fuzzy.fuzzy_candidates[0].skill_id == "S065"
+    assert fuzzy.fuzzy_candidates[0].meets_threshold is True
+    assert fuzzy.fuzzy_candidates[0].similarity == fuzzy.score
+
+    unmatched = normalize_skill("Quantum Computing", CATALOG)
+    assert unmatched.outcome == "unmatched"
+    assert unmatched.skill_id is None
+    assert unmatched.fuzzy_candidates
+    assert all(not candidate.meets_threshold for candidate in unmatched.fuzzy_candidates)
+
+    ambiguous_catalog = [
+        {"skill_id": "S-A", "canonical_name": "abcdefghijklmnopq"},
+        {"skill_id": "S-B", "canonical_name": "abcdefghijklmnopr"},
+    ]
+    ambiguous = normalize_skill("abcdefghijklmnopx", ambiguous_catalog)
+    assert ambiguous.outcome == "ambiguous"
+    assert ambiguous.skill_id is None
+    assert len(ambiguous.fuzzy_candidates) >= 2
+    assert ambiguous.fuzzy_candidates[0].similarity >= 0.88
+    assert ambiguous.fuzzy_candidates[0].similarity == ambiguous.fuzzy_candidates[1].similarity
+
+
 if __name__ == "__main__":
     main()

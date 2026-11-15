@@ -19,6 +19,8 @@ class ConfigurationDefinition(BaseModel):
     uses_deterministic_matching: bool
     uses_verification_agent: bool
     uses_revision_loop: bool
+    uses_skill_gap: bool
+    uses_learning_roadmap: bool
     llm_decides_ranking: bool
     llm_decides_skill_gap: bool
     description: str
@@ -32,11 +34,13 @@ CONFIGURATION_DEFINITIONS: dict[ConfigId, ConfigurationDefinition] = {
         uses_deterministic_matching=False,
         uses_verification_agent=False,
         uses_revision_loop=False,
+        uses_skill_gap=False,
+        uses_learning_roadmap=False,
         llm_decides_ranking=True,
-        llm_decides_skill_gap=True,
+        llm_decides_skill_gap=False,
         description=(
             "LLM-only baseline with no Occupational Knowledge Base access, no "
-            "deterministic matching/scoring, and no Verification Agent."
+            "deterministic matching/scoring, skill-gap or roadmap generation, and no Verification Agent."
         ),
     ),
     "B2": ConfigurationDefinition(
@@ -46,6 +50,8 @@ CONFIGURATION_DEFINITIONS: dict[ConfigId, ConfigurationDefinition] = {
         uses_deterministic_matching=False,
         uses_verification_agent=False,
         uses_revision_loop=False,
+        uses_skill_gap=True,
+        uses_learning_roadmap=False,
         llm_decides_ranking=True,
         llm_decides_skill_gap=True,
         description=(
@@ -61,6 +67,8 @@ CONFIGURATION_DEFINITIONS: dict[ConfigId, ConfigurationDefinition] = {
         uses_deterministic_matching=True,
         uses_verification_agent=False,
         uses_revision_loop=False,
+        uses_skill_gap=True,
+        uses_learning_roadmap=True,
         llm_decides_ranking=False,
         llm_decides_skill_gap=False,
         description=(
@@ -76,6 +84,8 @@ CONFIGURATION_DEFINITIONS: dict[ConfigId, ConfigurationDefinition] = {
         uses_deterministic_matching=True,
         uses_verification_agent=True,
         uses_revision_loop=True,
+        uses_skill_gap=True,
+        uses_learning_roadmap=True,
         llm_decides_ranking=False,
         llm_decides_skill_gap=False,
         description=(

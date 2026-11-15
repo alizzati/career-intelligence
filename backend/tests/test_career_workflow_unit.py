@@ -15,9 +15,16 @@ class FakeProfileAgent:
         self.result = result or SimpleNamespace(user_id=17, extracted={"skills": []})
         self.error = error
         self.calls = []
+        self.bundle_calls = []
 
     def run(self, user_id, raw_profile_text):
         self.calls.append((user_id, raw_profile_text))
+        if self.error:
+            raise self.error
+        return self.result
+
+    def run_from_bundle(self, user_id, bundle):
+        self.bundle_calls.append((user_id, bundle))
         if self.error:
             raise self.error
         return self.result
@@ -72,6 +79,23 @@ class FakeRoadmapAgent:
         return SimpleNamespace(skill_gap=skill_gap.skill_gap)
 
 
+class FakeEvidenceGate:
+    def __init__(self, error=None):
+        self.error = error
+        self.calls = []
+        self.discard_calls = []
+
+    def reassess_user_evidence(self, user_id):
+        self.calls.append(user_id)
+        if self.error:
+            raise self.error
+        return {"reassessed": 0, "accepted": 0, "revise": 0, "rejected": 0}
+
+    def discard_revise_spans(self, user_id):
+        self.discard_calls.append(user_id)
+        return 0
+
+
 class FakeVerificationAgent:
     def __init__(self, results=None, error=None):
         self.results = list(results or [VerificationResult(status="PASS", checks=[])])
@@ -106,15 +130,19 @@ def verification(status, check, component=None):
 
 
 def make_workflow(max_revisions=2, **overrides):
+    configuration_id = overrides.pop("configuration_id", "F")
     dependencies = {
         "profile_agent": FakeProfileAgent(),
         "career_recommendation_agent": FakeCareerRecommendationAgent(),
         "skill_gap_agent": FakeSkillGapAgent(),
         "learning_roadmap_agent": FakeRoadmapAgent(),
         "verification_agent": FakeVerificationAgent(),
+        "evidence_gate": FakeEvidenceGate(),
     }
     dependencies.update(overrides)
-    return CareerWorkflow(max_revisions=max_revisions, **dependencies), dependencies
+    return CareerWorkflow(
+        max_revisions=max_revisions, configuration_id=configuration_id, **dependencies
+    ), dependencies
 
 
 def test_graph_compiles_with_expected_nodes_and_edges():
@@ -122,7 +150,7 @@ def test_graph_compiles_with_expected_nodes_and_edges():
     graph = workflow.graph.get_graph()
     nodes = set(graph.nodes)
     assert {
-        "profile_analysis", "career_recommendation", "skill_gap_analysis",
+        "profile_analysis", "evidence_gate", "career_recommendation", "skill_gap_analysis",
         "learning_roadmap", "verification", "verification_decision", "final_result",
     }.issubset(nodes)
     assert "__start__" in nodes and "__end__" in nodes
@@ -143,6 +171,7 @@ def test_successful_workflow_skips_profile_parsing_for_existing_user():
     assert result["stage"] == "final_result"
     assert result["revision_count"] == 0
     assert result["verification"].status == "PASS"
+    assert result["first_pass_verification_status"] == "PASS"
     assert dependencies["profile_agent"].calls == []
     assert dependencies["skill_gap_agent"].calls == [(17, "C01")]
     assert dependencies["learning_roadmap_agent"].calls == [result["skill_gap"]]
@@ -152,12 +181,81 @@ def test_successful_workflow_skips_profile_parsing_for_existing_user():
     assert verified_inputs[2] is result["roadmap"]
 
 
+def test_b3_executes_pipeline_without_verification_or_revision():
+    dependencies = {
+        "profile_agent": FakeProfileAgent(),
+        "career_recommendation_agent": FakeCareerRecommendationAgent(),
+        "skill_gap_agent": FakeSkillGapAgent(),
+        "learning_roadmap_agent": FakeRoadmapAgent(),
+        "verification_agent": FakeVerificationAgent(),
+    }
+    workflow = CareerWorkflow(configuration_id="B3", **dependencies)
+    with mock.patch(
+        "app.workflows.career_workflow.us.get_user_full_profile",
+        return_value=SimpleNamespace(user_id=17),
+    ):
+        result = workflow.run(user_id=17)
+
+    assert result["configuration_id"] == "B3"
+    assert result["final_status"] == "UNVERIFIED"
+    assert result["first_pass_verification_status"] is None
+    assert result["revision_count"] == 0
+    assert dependencies["skill_gap_agent"].calls == [(17, "C01")]
+    assert len(dependencies["learning_roadmap_agent"].calls) == 1
+    assert dependencies["verification_agent"].calls == []
+
+
+@pytest.mark.parametrize("configuration_id", ["B0", "B2"])
+def test_llm_baselines_require_an_injected_llm_client(configuration_id):
+    with pytest.raises(ValueError, match="requires the configured LLM client"):
+        CareerWorkflow(configuration_id=configuration_id)
+
+
 def test_raw_profile_is_analyzed_only_when_supplied():
     profile_agent = FakeProfileAgent()
     workflow, _ = make_workflow(profile_agent=profile_agent)
     result = workflow.run(user_id=17, raw_profile_text="candidate profile text")
     assert result["final_status"] == "VERIFIED"
     assert profile_agent.calls == [(17, "candidate profile text")]
+
+
+def test_initial_revise_evidence_uses_the_existing_revision_budget():
+    profile_agent = FakeProfileAgent(result=SimpleNamespace(
+        user_id=17, extracted={"skills": []}, evidence_revise=1,
+    ))
+    evidence_gate = FakeEvidenceGate()
+    workflow, _ = make_workflow(
+        profile_agent=profile_agent, evidence_gate=evidence_gate,
+    )
+
+    result = workflow.run(user_id=17, raw_profile_text="candidate profile text")
+
+    assert result["final_status"] == "VERIFIED"
+    assert result["revision_count"] == 1
+    assert evidence_gate.calls == [17]
+    assert evidence_gate.discard_calls == []
+
+
+@pytest.mark.parametrize("configuration_id", ["B3", "F"])
+def test_deterministic_configurations_accept_the_frozen_pre_normalization_bundle(configuration_id):
+    from app.evaluation.baseline_inference import FrozenProfileBundle, SkillMention
+
+    bundle = FrozenProfileBundle(
+        extracted_cv_text="Redacted candidate CV used Python in a project",
+        skill_mentions=[SkillMention(mention_id="m1", text="Python", evidence_spans=["Python in a project"] )],
+        experience=[{"role_title": "Developer"}],
+        education=[{"institution": "University"}],
+    )
+    profile_agent = FakeProfileAgent()
+    workflow, dependencies = make_workflow(configuration_id=configuration_id, profile_agent=profile_agent)
+    with mock.patch(
+        "app.workflows.career_workflow.us.get_user_full_profile",
+        return_value=SimpleNamespace(user_id=17),
+    ):
+        result = workflow.run(user_id=17, profile_bundle=bundle)
+    assert result["final_status"] == ("UNVERIFIED" if configuration_id == "B3" else "VERIFIED")
+    assert profile_agent.bundle_calls == [(17, bundle)]
+    assert result.get("input_profile_bundle") is None
 
 
 def test_explicit_canonical_career_is_propagated_to_skill_gap_agent():
@@ -194,6 +292,7 @@ def test_fail_routes_to_responsible_upstream_agent_and_reverifies_dependents():
 
     assert result["final_status"] == "VERIFIED"
     assert result["revision_count"] == 1
+    assert result["first_pass_verification_status"] == "FAIL"
     assert career_agent.calls == [17, 17]
     assert gap_agent.calls == [(17, "C01"), (17, "C01")]
     assert len(roadmap_agent.calls) == 2
@@ -264,6 +363,108 @@ def test_revision_limit_terminates_and_does_not_turn_failure_into_success():
     assert result["verification"].status == "FAIL"
     assert len(verifier.calls) == 2
     assert len(dependencies["skill_gap_agent"].calls) == 2
+
+
+def test_user_evidence_failure_routes_through_evidence_gate_and_regenerates():
+    career_agent = FakeCareerRecommendationAgent()
+    gap_agent = FakeSkillGapAgent()
+    roadmap_agent = FakeRoadmapAgent()
+    evidence_gate = FakeEvidenceGate()
+    verifier = FakeVerificationAgent(results=[
+        verification("REVISE", "user_evidence.provenance"),
+        VerificationResult(status="PASS", checks=[]),
+    ])
+    workflow, _ = make_workflow(
+        career_recommendation_agent=career_agent,
+        skill_gap_agent=gap_agent,
+        learning_roadmap_agent=roadmap_agent,
+        verification_agent=verifier,
+        evidence_gate=evidence_gate,
+    )
+    with mock.patch(
+        "app.workflows.career_workflow.us.get_user_full_profile",
+        return_value=SimpleNamespace(user_id=17),
+    ):
+        result = workflow.run(user_id=17)
+
+    assert result["final_status"] == "VERIFIED"
+    assert result["revision_count"] == 1
+    assert result["first_pass_verification_status"] == "REVISE"
+    assert evidence_gate.calls == [17]
+    # Evidence acceptance is upstream, so the skill-derived outputs rerun.
+    assert career_agent.calls == [17, 17]
+    assert gap_agent.calls == [(17, "C01"), (17, "C01")]
+    assert len(roadmap_agent.calls) == 2
+    assert len(verifier.calls) == 2
+
+
+def test_user_evidence_revision_precedes_recommendation_revision():
+    evidence_gate = FakeEvidenceGate()
+    second = VerificationResult(
+        status="REVISE",
+        checks=[
+            VerificationCheck(check="user_evidence.single_credit", status="REVISE", reason="dup"),
+            VerificationCheck(check="recommendation.C01.deterministic_score", status="REVISE", reason="mismatch"),
+        ],
+    )
+    verifier = FakeVerificationAgent(results=[
+        second,
+        VerificationResult(status="PASS", checks=[]),
+    ])
+    workflow, dependencies = make_workflow(
+        verification_agent=verifier, evidence_gate=evidence_gate,
+    )
+    with mock.patch(
+        "app.workflows.career_workflow.us.get_user_full_profile",
+        return_value=SimpleNamespace(user_id=17),
+    ):
+        result = workflow.run(user_id=17)
+
+    assert result["final_status"] == "VERIFIED"
+    assert evidence_gate.calls == [17]
+    assert dependencies["career_recommendation_agent"].calls == [17, 17]
+
+
+def test_evidence_revision_stops_at_the_existing_revision_limit():
+    verifier = FakeVerificationAgent(results=[
+        verification("FAIL", "user_evidence.single_credit"),
+        verification("FAIL", "user_evidence.single_credit"),
+    ])
+    evidence_gate = FakeEvidenceGate()
+    workflow, dependencies = make_workflow(
+        max_revisions=1,
+        verification_agent=verifier,
+        evidence_gate=evidence_gate,
+    )
+    with mock.patch(
+        "app.workflows.career_workflow.us.get_user_full_profile",
+        return_value=SimpleNamespace(user_id=17),
+    ):
+        result = workflow.run(user_id=17)
+
+    assert result["final_status"] == "REVISION_LIMIT_REACHED"
+    assert result["revision_count"] == 1
+    assert evidence_gate.calls == [17]
+    assert len(verifier.calls) == 2
+    assert result["verification"].status == "FAIL"
+    assert len(dependencies["career_recommendation_agent"].calls) == 2
+
+
+def test_evidence_gate_exception_is_a_structured_workflow_error():
+    workflow, _ = make_workflow(
+        verification_agent=FakeVerificationAgent(results=[
+            verification("REVISE", "user_evidence.provenance"),
+        ]),
+        evidence_gate=FakeEvidenceGate(error=RuntimeError("gate failed")),
+    )
+    with mock.patch(
+        "app.workflows.career_workflow.us.get_user_full_profile",
+        return_value=SimpleNamespace(user_id=17),
+    ):
+        result = workflow.run(user_id=17)
+
+    assert result["final_status"] == "ERROR"
+    assert result["errors"][0]["stage"] == "evidence_gate"
 
 
 def test_nonpassing_result_without_supported_revision_route_stays_nonpassing():

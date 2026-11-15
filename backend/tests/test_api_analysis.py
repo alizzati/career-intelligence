@@ -7,6 +7,7 @@ from unittest import mock
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import ProgrammingError
 from starlette.datastructures import UploadFile
 
 from app.agents.profile_agent import ProfileAgent
@@ -383,6 +384,43 @@ def test_cv_route_reports_quota_failure_from_real_profile_agent_without_pii(capl
     assert "synthetic provider details" not in response.text + caplog.text
     for value in SENSITIVE:
         assert value not in response.text + caplog.text.lower()
+
+
+def test_cv_route_logs_sanitized_programming_error_without_sql_or_user_data(caplog):
+    class Diagnostic:
+        sqlstate = "42P01"
+        message_primary = 'relation "user_accepted_evidence" does not exist'
+        message_detail = "cv-private-sentinel and credential-private-sentinel"
+
+    class DriverError(Exception):
+        pgcode = "42P01"
+        diag = Diagnostic()
+
+    error = ProgrammingError(
+        "SELECT secret-column FROM secret-table WHERE email = :email",
+        {"email": "sinta@example.test", "cv": "cv-private-sentinel"},
+        DriverError("credential-private-sentinel"),
+    )
+    client, _ = make_client(make_workflow()[0])
+
+    with (
+        mock.patch("app.api.routes.analysis._precheck", side_effect=error),
+        caplog.at_level(logging.ERROR),
+    ):
+        response = upload(client, b"CV_SENTINEL", "safe.txt")
+
+    assert response.status_code == 500
+    assert "internal_error" in response.text
+    assert "ProgrammingError" in caplog.text
+    assert "42P01" in caplog.text
+    assert "referenced relation is missing: user_accepted_evidence" in caplog.text
+    assert "traceback_frames" in caplog.text
+    for sensitive in (
+        "SELECT secret-column", "secret-table", "sinta@example.test",
+        "cv-private-sentinel", "credential-private-sentinel",
+    ):
+        assert sensitive not in caplog.text
+        assert sensitive not in response.text
 
 
 def test_llm_unavailable_returns_503_without_any_provider_call():

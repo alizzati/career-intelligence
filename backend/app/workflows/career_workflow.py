@@ -23,6 +23,12 @@ from app.services.profile_privacy_service import (
 )
 from app.services import retrieval_service as rs
 from app.services import user_service as us
+from app.services.evidence_acceptance_service import EvidenceGate
+from app.evaluation.configurations import get_configuration
+from app.evaluation.baseline_inference import (
+    BaselineInferenceAgent, BaselineInferenceResult, CareerOutputLabel, FrozenProfileBundle,
+    FrozenProfileBundleExtractor,
+)
 
 logger = logging.getLogger(__name__)
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -83,9 +89,10 @@ WorkflowFinalStatus = Literal[
     "VERIFIED",
     "VERIFICATION_FAILED",
     "REVISION_LIMIT_REACHED",
+    "UNVERIFIED",
     "ERROR",
 ]
-RevisionTarget = Literal["career_recommendation", "skill_gap", "roadmap"]
+RevisionTarget = Literal["evidence", "career_recommendation", "skill_gap", "roadmap"]
 
 
 class WorkflowError(TypedDict):
@@ -98,6 +105,8 @@ class CareerWorkflowState(TypedDict):
     """Minimum state needed to coordinate the existing agent contracts."""
 
     user_id: int
+    configuration_id: NotRequired[str]
+    first_pass_verification_status: NotRequired[str | None]
     target_career_id: str | None
     redacted_profile_text: NotRequired[str]
     profile_result: NotRequired[ProfileAgentResult | UserFullProfileOut | None]
@@ -110,6 +119,8 @@ class CareerWorkflowState(TypedDict):
     revision_target: NotRequired[RevisionTarget | None]
     final_status: WorkflowFinalStatus
     errors: list[WorkflowError]
+    baseline_result: NotRequired[BaselineInferenceResult | None]
+    input_profile_bundle: NotRequired[FrozenProfileBundle | None]
 
 
 class CareerWorkflow:
@@ -130,10 +141,22 @@ class CareerWorkflow:
         skill_gap_agent: SkillGapAgent | None = None,
         learning_roadmap_agent: LearningRoadmapAgent | None = None,
         verification_agent: VerificationAgent | None = None,
+        evidence_gate: EvidenceGate | None = None,
+        configuration_id: str = "F",
+        career_labels: list[CareerOutputLabel] | None = None,
     ):
         if not isinstance(max_revisions, int) or isinstance(max_revisions, bool) or max_revisions < 0:
             raise ValueError("max_revisions must be a non-negative integer")
         self.max_revisions = max_revisions
+        self.llm_client = llm_client
+        self.configuration = get_configuration(configuration_id)
+        self.career_labels = career_labels
+        self.baseline_agent = (
+            BaselineInferenceAgent(llm_client=llm_client, configuration_id=configuration_id)
+            if configuration_id in {"B0", "B2"} and llm_client is not None else None
+        )
+        if configuration_id in {"B0", "B2"} and llm_client is None:
+            raise ValueError(f"{configuration_id} requires the configured LLM client")
         self.profile_agent = (
             profile_agent
             if profile_agent is not None
@@ -159,7 +182,10 @@ class CareerWorkflow:
             if verification_agent is not None
             else VerificationAgent(llm_client=llm_client)
         )
-        self.graph = self._compile()
+        self.evidence_gate = (
+            evidence_gate if evidence_gate is not None else EvidenceGate(llm_client=llm_client)
+        )
+        self.graph = None if configuration_id in {"B0", "B2"} else self._compile()
 
     @staticmethod
     def _error_update(
@@ -192,6 +218,12 @@ class CareerWorkflow:
 
     def _profile_analysis(self, state: CareerWorkflowState) -> dict:
         try:
+            frozen_bundle = state.get("input_profile_bundle")
+            if frozen_bundle is not None:
+                if self.profile_agent is None:
+                    raise RuntimeError("a ProfileAgent is required to normalize the frozen profile bundle")
+                result = self.profile_agent.run_from_bundle(state["user_id"], frozen_bundle)
+                return self._profile_result_update(state, result)
             profile_text = state.get("redacted_profile_text")
             if profile_text is not None:
                 if not profile_text.strip():
@@ -207,17 +239,57 @@ class CareerWorkflow:
                 result = us.get_user_full_profile(state["user_id"])
                 if result is None:
                     raise ValueError(f"user_id={state['user_id']} does not exist")
-            return {
-                "profile_result": result,
-                "stage": "profile_analysis",
-                "final_status": "RUNNING",
-            }
+            return self._profile_result_update(state, result)
         except Exception as exc:
             return self._error_update(
                 "profile_analysis",
                 exc,
                 safe_message="Profile analysis failed; submitted profile details were omitted.",
             )
+
+    def _profile_result_update(self, state: CareerWorkflowState, result) -> dict:
+        """Route initial REVISE candidates through the existing bounded gate."""
+        revise_count = int(getattr(result, "evidence_revise", 0) or 0)
+        revision_count = state["revision_count"]
+        revision_target = state.get("revision_target")
+        if revise_count:
+            if self.configuration.uses_revision_loop and revision_count < self.max_revisions:
+                revision_count += 1
+                revision_target = "evidence"
+            else:
+                # B0/B2/B3 have no revision loop, and F may have a zero
+                # revision budget. Do not retain raw CV spans when no recheck
+                # can occur; the candidate remains visibly REVISE/non-accepted.
+                self.evidence_gate.discard_revise_spans(state["user_id"])
+        return {
+            "profile_result": result,
+            "revision_count": revision_count,
+            "revision_target": revision_target,
+            "stage": "profile_analysis",
+            "final_status": "RUNNING",
+        }
+
+    @staticmethod
+    def _after_profile(state: CareerWorkflowState) -> str:
+        if state["final_status"] == "ERROR":
+            return "final_result"
+        return "evidence_gate" if state.get("revision_target") == "evidence" else "career_recommendation"
+
+    def _evidence_gate(self, state: CareerWorkflowState) -> dict:
+        """Reassess REVISE evidence, then regenerate downstream outputs.
+
+        The Evidence Gate owns evidence acceptance; it never rewrites the
+        verification result. Downstream stages read the refreshed effective
+        profile, so recommendations, skill gap, and roadmap are regenerated.
+        """
+        try:
+            self.evidence_gate.reassess_user_evidence(state["user_id"])
+            return {
+                "stage": "evidence_gate",
+                "final_status": "RUNNING",
+            }
+        except Exception as exc:
+            return self._stage_error_update("evidence_gate", exc, state)
 
     def _career_recommendation(self, state: CareerWorkflowState) -> dict:
         try:
@@ -300,6 +372,10 @@ class CareerWorkflow:
             )
             return {
                 "verification": result,
+                "first_pass_verification_status": (
+                    result.status if state.get("first_pass_verification_status") is None
+                    else state.get("first_pass_verification_status")
+                ),
                 "revision_target": None,
                 "stage": "verification",
                 "final_status": "RUNNING",
@@ -322,6 +398,8 @@ class CareerWorkflow:
                 targets.add("skill_gap")
             elif check.check.startswith("roadmap."):
                 targets.add("roadmap")
+            elif check.check.startswith("user_evidence."):
+                targets.add("evidence")
         for claim in verification.unsupported_claims:
             if claim.component.startswith("recommendation:"):
                 targets.add("career_recommendation")
@@ -331,9 +409,10 @@ class CareerWorkflow:
                 targets.add("roadmap")
 
         # Upstream agents take precedence; their downstream results are
-        # regenerated naturally by the graph's existing stage edges.
+        # regenerated naturally by the graph's existing stage edges. Evidence
+        # acceptance is upstream of every skill-derived output.
         candidates: tuple[RevisionTarget, ...] = (
-            "career_recommendation", "skill_gap", "roadmap",
+            "evidence", "career_recommendation", "skill_gap", "roadmap",
         )
         for candidate in candidates:
             if candidate in targets:
@@ -392,10 +471,13 @@ class CareerWorkflow:
             "career_recommendation": "career_recommendation",
             "skill_gap": "skill_gap_analysis",
             "roadmap": "learning_roadmap",
+            "evidence": "evidence_gate",
         }.get(state.get("revision_target"), "final_result")
 
     @staticmethod
     def _finish(state: CareerWorkflowState) -> dict:
+        if state.get("verification") is None and state.get("configuration_id") == "B3":
+            return {"stage": "final_result", "final_status": "UNVERIFIED"}
         verification = state.get("verification")
         final_status = state["final_status"]
         if final_status == "VERIFIED" and (
@@ -419,6 +501,7 @@ class CareerWorkflow:
     def _compile(self):
         graph = StateGraph(CareerWorkflowState)
         graph.add_node("profile_analysis", self._profile_analysis)
+        graph.add_node("evidence_gate", self._evidence_gate)
         graph.add_node("career_recommendation", self._career_recommendation)
         graph.add_node("skill_gap_analysis", self._skill_gap_analysis)
         graph.add_node("learning_roadmap", self._learning_roadmap)
@@ -429,8 +512,12 @@ class CareerWorkflow:
         graph.add_edge(START, "profile_analysis")
         graph.add_conditional_edges(
             "profile_analysis",
-            lambda state: self._after_stage(state, "career_recommendation"),
-            {"career_recommendation": "career_recommendation", "final_result": "final_result"},
+            self._after_profile,
+            {
+                "evidence_gate": "evidence_gate",
+                "career_recommendation": "career_recommendation",
+                "final_result": "final_result",
+            },
         )
         graph.add_conditional_edges(
             "career_recommendation",
@@ -444,7 +531,9 @@ class CareerWorkflow:
         )
         graph.add_conditional_edges(
             "learning_roadmap",
-            lambda state: self._after_stage(state, "verification"),
+            lambda state: self._after_stage(
+                state, "verification" if self.configuration.uses_verification_agent else "final_result"
+            ),
             {"verification": "verification", "final_result": "final_result"},
         )
         graph.add_conditional_edges(
@@ -456,11 +545,17 @@ class CareerWorkflow:
             "verification_decision",
             self._after_decision,
             {
+                "evidence_gate": "evidence_gate",
                 "career_recommendation": "career_recommendation",
                 "skill_gap_analysis": "skill_gap_analysis",
                 "learning_roadmap": "learning_roadmap",
                 "final_result": "final_result",
             },
+        )
+        graph.add_conditional_edges(
+            "evidence_gate",
+            lambda state: self._after_stage(state, "career_recommendation"),
+            {"career_recommendation": "career_recommendation", "final_result": "final_result"},
         )
         graph.add_edge("final_result", END)
         return graph.compile()
@@ -471,10 +566,14 @@ class CareerWorkflow:
         target_career_id: str | None = None,
         raw_profile_text: str | None = None,
         observer: Callable[[str, dict], None] | None = None,
+        profile_bundle: FrozenProfileBundle | dict | None = None,
+        career_labels: list[CareerOutputLabel] | None = None,
     ) -> CareerWorkflowState:
         """Run the compiled graph and return all original outputs plus findings."""
         initial_state: CareerWorkflowState = {
             "user_id": user_id,
+            "configuration_id": self.configuration.config_id,
+            "first_pass_verification_status": None,
             "target_career_id": target_career_id,
             "profile_result": None,
             "recommendations": None,
@@ -486,6 +585,8 @@ class CareerWorkflow:
             "revision_target": None,
             "final_status": "RUNNING",
             "errors": [],
+            "baseline_result": None,
+            "input_profile_bundle": None,
         }
         if not isinstance(user_id, int) or isinstance(user_id, bool) or user_id <= 0:
             initial_state.update(self._error_update(
@@ -493,6 +594,55 @@ class CareerWorkflow:
                 ValueError("user_id must be a positive integer"),
             ))
             return initial_state
+        if self.configuration.config_id in {"B0", "B2"}:
+            if target_career_id is not None:
+                return {**initial_state, **self._error_update(
+                    "input_validation",
+                    ValueError("B0/B2 cannot receive a preselected career or ground-truth label"),
+                )}
+            if profile_bundle is None and raw_profile_text is not None:
+                try:
+                    profile_bundle = self.extract_profile_bundle(raw_profile_text)
+                except Exception as exc:
+                    return {**initial_state, **self._error_update("profile_bundle_extraction", exc)}
+            if profile_bundle is None:
+                return self._error_update(
+                    "input_validation",
+                    ValueError("B0/B2 require the shared pre-normalization profile_bundle"),
+                ) | {
+                    "user_id": user_id,
+                    "configuration_id": self.configuration.config_id,
+                    "first_pass_verification_status": None,
+                    "target_career_id": target_career_id,
+                    "profile_result": None,
+                    "recommendations": None,
+                    "skill_gap": None,
+                    "roadmap": None,
+                    "verification": None,
+                    "stage": "input_validation",
+                    "revision_count": 0,
+                    "final_status": "ERROR",
+                    "baseline_result": None,
+                    "input_profile_bundle": None,
+                }
+            try:
+                result = self.baseline_agent.run(
+                    FrozenProfileBundle.model_validate(profile_bundle),
+                    career_labels=career_labels or self.career_labels,
+                )
+                return {
+                    **initial_state,
+                    "baseline_result": result,
+                    "input_profile_bundle": None,
+                    "recommendations": result.recommendations,
+                    "stage": "final_result",
+                    "final_status": "UNVERIFIED",
+                }
+            except Exception as exc:
+                return {**initial_state, **self._error_update("baseline_inference", exc)}
+        if not self.configuration.uses_verification_agent:
+            # The graph's verification and revision nodes are unreachable in B3.
+            initial_state["revision_count"] = 0
         if target_career_id is not None and (
             not isinstance(target_career_id, str) or not target_career_id.strip()
         ):
@@ -509,6 +659,17 @@ class CareerWorkflow:
                 ValueError("raw_profile_text must be a non-empty string when supplied"),
             ))
             return initial_state
+        if profile_bundle is not None:
+            if raw_profile_text is not None:
+                initial_state.update(self._error_update(
+                    "input_validation", ValueError("supply profile_bundle or raw_profile_text, not both")
+                ))
+                return initial_state
+            try:
+                initial_state["input_profile_bundle"] = FrozenProfileBundle.model_validate(profile_bundle)
+            except Exception as exc:
+                initial_state.update(self._error_update("input_validation", exc))
+                return initial_state
         if raw_profile_text is not None:
             initial_state["redacted_profile_text"] = redact_pii(raw_profile_text).redacted_text
         try:
@@ -533,6 +694,7 @@ class CareerWorkflow:
                 if result is None:
                     raise RuntimeError("Observed workflow completed without a final state.")
             result.pop("redacted_profile_text", None)
+            result.pop("input_profile_bundle", None)
             return result
         except Exception as exc:
             # Graph/runtime errors are also returned as explicit workflow
@@ -545,6 +707,12 @@ class CareerWorkflow:
             initial_state.update(self._error_update("workflow", exc, safe_message=safe_message))
             return initial_state
 
+    def extract_profile_bundle(self, extracted_cv_text: str) -> FrozenProfileBundle:
+        """Extract one redacted pre-normalization bundle for paired configurations."""
+        if self.llm_client is None:
+            raise RuntimeError("profile bundle extraction requires the configured LLM client")
+        return FrozenProfileBundleExtractor(self.llm_client).run(extracted_cv_text)
+
 
 def build_career_workflow(
     *,
@@ -555,9 +723,11 @@ def build_career_workflow(
     skill_gap_agent: SkillGapAgent | None = None,
     learning_roadmap_agent: LearningRoadmapAgent | None = None,
     verification_agent: VerificationAgent | None = None,
+    configuration_id: str = "F",
+    career_labels: list[CareerOutputLabel] | None = None,
 ):
     """Construct the compiled StateGraph with optional agent substitutions."""
-    return CareerWorkflow(
+    workflow = CareerWorkflow(
         llm_client=llm_client,
         max_revisions=max_revisions,
         profile_agent=profile_agent,
@@ -565,4 +735,7 @@ def build_career_workflow(
         skill_gap_agent=skill_gap_agent,
         learning_roadmap_agent=learning_roadmap_agent,
         verification_agent=verification_agent,
-    ).graph
+        configuration_id=configuration_id,
+        career_labels=career_labels,
+    )
+    return workflow if workflow.graph is None else workflow.graph

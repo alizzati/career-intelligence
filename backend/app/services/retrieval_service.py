@@ -27,8 +27,9 @@ def _provenance_out(row: dict) -> ProvenanceOut | None:
     return ProvenanceOut(
         provenance_id=row["p_id"], source_name=row["p_source_name"],
         document_id=row["document_id"], document_title=row["document_title"],
-        version_or_year=row["version_or_year"], url=row.get("url"),
-        source_type=row["source_type"],
+        version_or_year=row["version_or_year"],
+        page_or_section=row.get("page_or_section"), url=row.get("url"),
+        source_type=row["source_type"], scope_note=row.get("scope_note"),
     )
 
 
@@ -182,7 +183,8 @@ def get_occupational_context(career_id: str) -> OccupationalContextOut | None:
             source_mappings[oid] = [
                 OccupationSourceMappingOut(
                     mapping_id=r["mapping_id"], source_name=r["source_name"],
-                    source_code=r["source_code"], confidence=r["confidence"],
+                    source_code=r["source_code"], source_title=r.get("source_title"),
+                    source_scope=r.get("source_scope"), confidence=r["confidence"],
                     mapping_basis=r["mapping_basis"], provenance=_provenance_out(r),
                 ) for r in sm_rows
             ]

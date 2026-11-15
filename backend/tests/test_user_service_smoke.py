@@ -3,7 +3,11 @@ End-to-end smoke test for the user domain (STEP 6).
 
 Key behavior under test: a claimed skill with NO evidence must show
 evidence_status == 'none', NOT be dropped or silently marked 'missing'.
-A second claimed skill WITH evidence must show evidence_status == 'linked'.
+
+Stage 3.4.1 note: a legacy ``user_skill_evidence`` row (written by
+``add_skill_evidence``) is an audit row only. It does NOT make a skill
+'linked' in the effective profile; only a row in ``user_accepted_evidence``
+produced by the evidence acceptance gate can do that.
 
 Run: python -m tests.test_user_service_smoke   (from backend/)
 """
@@ -49,7 +53,6 @@ def main():
         source_id=None, description="Built a normalized schema for a course project",
     )
     print(f"  {proj_ev}")
-
     print("\n=== get_user_full_profile() ===")
     full = us.get_user_full_profile(user.user_id)
     assert full is not None
@@ -62,7 +65,12 @@ def main():
     python_in_profile = next(s for s in full.skills if s.claimed_skill == "Python")
     sql_in_profile = next(s for s in full.skills if s.claimed_skill == "Database Management")
     assert python_in_profile.evidence_status == "none" and len(python_in_profile.evidence) == 0
-    assert sql_in_profile.evidence_status == "linked" and len(sql_in_profile.evidence) == 1
+    # The legacy audit row exists, but it is not accepted evidence: effective
+    # status stays 'none' until the acceptance gate records accepted evidence.
+    assert sql_in_profile.evidence_status == "none", \
+        f"expected effective status 'none' from an unaccepted legacy row, got {sql_in_profile.evidence_status!r}"
+    assert len(sql_in_profile.evidence) == 1
+    assert sql_in_profile.accepted_evidence == []
     assert sql_in_profile.skill_id == sql_skill_id, "Database Management should be normalized to the real KB skill_id"
 
     print("\n=== get_user_full_profile() for nonexistent user -> None ===")
